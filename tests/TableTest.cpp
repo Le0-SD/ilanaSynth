@@ -87,6 +87,7 @@ void timedRun (const char* name, Suite&& suite)
 #include "PhysModTests.inc"
 #include "FilterPairTests.inc"
 #include "CpuPassTests.inc"
+#include "CpuRound3Tests.inc"
 #include "StressTests.inc"
 #include "OscRoutingTests.inc"
 #include "OscSlotTests.inc"
@@ -348,6 +349,13 @@ int main()
     {
         runStressTests();
         std::cout << (failures == 0 ? "STRESS TESTS PASSED" : "STRESS TESTS FAILED") << " (" << failures << " failures)" << std::endl;
+        return failures == 0 ? 0 : 1;
+    }
+
+    if (juce::SystemStats::getEnvironmentVariable ("ILANA_CPU3_TEST", "").isNotEmpty())
+    {
+        runCpuRound3Tests();
+        std::cout << (failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED") << " (" << failures << " failures)" << std::endl;
         return failures == 0 ? 0 : 1;
     }
 
@@ -826,6 +834,7 @@ int main()
     timedRun ("runPhysModTests", [] { runPhysModTests(); });
     timedRun ("runFilterPairTests", [] { runFilterPairTests(); });
     timedRun ("runCpuPassTests", [] { runCpuPassTests(); });
+    timedRun ("runCpuRound3Tests", [] { runCpuRound3Tests(); });
     timedRun ("runStressTests", [] { runStressTests(); });
     timedRun ("runSampleTempoTests", [] { runSampleTempoTests(); });
     timedRun ("runSamplerTests", [] { runSamplerTests(); });

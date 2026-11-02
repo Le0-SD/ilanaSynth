@@ -235,7 +235,8 @@ void Voice::syncSamplePlayers()
         sampleParams.stretch = osc.sampleStretch || osc.sampleEngine >= 0;
 
         for (int u = 0; u < VoiceParams::maxBufferedUnison; ++u)
-            players[u].setParams (sampleParams);
+            if (! players[u].setParamsIsNoOp (sampleParams))
+                players[u].setParams (sampleParams);
 
         if (osc.granularMode && clouds != nullptr)
         {

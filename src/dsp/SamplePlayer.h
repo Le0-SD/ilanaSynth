@@ -324,6 +324,17 @@ public:
             startGrains();
     }
 
+    // True when setParams (newParams) would change nothing that is ever
+    // read again: no sample before or after, nothing playing, and the same
+    // stretch flag (the one field a later sample's setParams compares). The
+    // voice asks every block for every oscillator's eight players, and
+    // most oscillators play no sample.
+    bool setParamsIsNoOp (const Params& newParams) const noexcept
+    {
+        return newParams.sample == nullptr && params.sample == nullptr && ! active
+               && newParams.stretch == params.stretch && lastLength == 0;
+    }
+
     void setParams (const Params& newParams)
     {
         const auto newSample = newParams.sample != params.sample;

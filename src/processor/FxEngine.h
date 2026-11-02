@@ -146,7 +146,7 @@ private:
     std::atomic<bool> reverbIrLoaded { false };
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delayLine { 96000 };
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> combLine { 96000 };
-    juce::Reverb reverb;
+    FreeverbFast reverb; // juce::Reverb, bit for bit, without the divisions
 
     GranularPitchShift tapeShift[2];
     GranularPitchShift shimmerShift[2];

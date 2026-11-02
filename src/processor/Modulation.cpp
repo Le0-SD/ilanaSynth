@@ -855,8 +855,10 @@ void IlanaSynthAudioProcessor::renderLfos (int numSamples, const juce::MidiBuffe
         smoothCoefficients[lfo] = LfoSmoother::coefficientFor (getParam (ids.smooth), (double) lfoRates[lfo], currentSampleRate);
         lfoSims[(size_t) lfo].sampleRate = currentSampleRate;
 
-        for (int step = 0; step < 16; ++step)
-            lfoSteps[lfo][step] = getParam (ids.steps[(size_t) step]);
+        // (Only the Steps shape reads them: 16 reads per LFO per block otherwise.)
+        if ((int) lfoShapes[lfo] == 7)
+            for (int step = 0; step < 16; ++step)
+                lfoSteps[lfo][step] = getParam (ids.steps[(size_t) step]);
     }
 
     float* lfoBufferPointers[numLfos] {};
@@ -1190,32 +1192,44 @@ void IlanaSynthAudioProcessor::evaluateGlobalModulation (const Mod::Slot* slots,
         totals[slot.destination] += slot.depth * value;
     }
 
+    // (Relaxed: the editor only shows these; a sequentially consistent
+    // store is a locked exchange, and this was 1024 of them every block.)
     for (int d = 0; d < maxDestinations; ++d)
-        modDisplayValues[(size_t) d].store (totals[d]);
+        modDisplayValues[(size_t) d].store (totals[d], std::memory_order_relaxed);
 
-    for (int i = 0; i < (int) paramDestinations.size(); ++i)
+    // Which parameter destinations take the synth-wide offset, and their
+    // signs, worked out once: the OSC 4-6 FM cells are modulated per voice
+    // instead, and the Operator Env's stage rates are times on their knobs
+    // (review 7, I7-3): a positive amount lengthens the stage, so it lowers
+    // the DX7 rate the parameter stores. Every rate: ATTACK, DECAY 1 / 2 and
+    // RELEASE of each operator and of OP PITCH.
+    struct GlobalTarget
     {
-        // The OSC 4-6 FM cells are modulated per voice instead.
-        if (Mod::extendedFmCellFor (Mod::paramDestinationFor (i)) >= 0)
-            continue;
-
-        // The Operator Env's stage rates are times on their knobs (review 7,
-        // I7-3): a positive amount lengthens the stage, so it lowers the DX7
-        // rate the parameter stores. Every rate: ATTACK, DECAY 1 / 2 and
-        // RELEASE of each operator and of OP PITCH.
-        static const auto reversed = []
+        int index, destination;
+        float sign;
+    };
+    static const auto globalParamDestinations = []
+    {
+        std::vector<GlobalTarget> list;
+        const auto& entries = Mod::getParamDestinations();
+        for (int i = 0; i < (int) entries.size(); ++i)
         {
-            std::vector<bool> flags;
-            for (const auto& entry : Mod::getParamDestinations())
-            {
-                const juce::String id (entry.id);
-                flags.push_back (id.endsWith ("_eg_r1") || id.endsWith ("_eg_r2") || id.endsWith ("_eg_r3") || id.endsWith ("_eg_r4")
-                                || id.startsWith ("opeg_pitch_r"));
-            }
-            return flags;
-        }();
-        const auto offset = totals[Mod::paramDestinationFor (i)]
-                            * (juce::isPositiveAndBelow (i, (int) reversed.size()) && reversed[(size_t) i] ? -1.0f : 1.0f);
+            if (Mod::extendedFmCellFor (Mod::paramDestinationFor (i)) >= 0)
+                continue;
+            const juce::String id (entries[(size_t) i].id);
+            const auto reversed = id.endsWith ("_eg_r1") || id.endsWith ("_eg_r2") || id.endsWith ("_eg_r3") || id.endsWith ("_eg_r4")
+                                  || id.startsWith ("opeg_pitch_r");
+            list.push_back ({ i, Mod::paramDestinationFor (i), reversed ? -1.0f : 1.0f });
+        }
+        return list;
+    }();
+
+    for (const auto& entry : globalParamDestinations)
+    {
+        const auto i = entry.index;
+        if (i >= (int) paramDestinations.size())
+            continue;
+        const auto offset = totals[entry.destination] * entry.sign;
 
         if (offset != 0.0f && paramDestinations[(size_t) i].parameter != nullptr)
         {

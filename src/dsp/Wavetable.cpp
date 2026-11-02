@@ -572,11 +572,34 @@ void Wavetable::buildLevels (const std::vector<std::vector<float>>& frames, bool
                 const auto inBand = energy[(size_t) juce::jmin (frameSize / 2 - 1, maxHarmonic)];
                 const auto silent = inBand <= energy[(size_t) frameSize / 2] * 1.0e-12;
 
-                for (int i = 0; i < frameSize; ++i)
+                // (The branches out of the loop and the peak in four running
+                // maxima: one chained jmax per sample was most of this. The
+                // largest value is the same in any order, so the peak is too.)
+                auto* out = target.data() + 1;
+                if (silent)
                 {
-                    const auto value = silent ? 0.0f : which == 0 ? levelTime[(size_t) i].real() : levelTime[(size_t) i].imag();
-                    target[(size_t) i + 1] = value;
-                    peak = juce::jmax (peak, std::abs (value));
+                    std::fill (out, out + frameSize, 0.0f);
+                }
+                else
+                {
+                    const auto* source = reinterpret_cast<const float*> (levelTime.data()) + which;
+                    float peaks[4] {};
+                    auto i = 0;
+                    for (; i + 4 <= frameSize; i += 4)
+                        for (int k = 0; k < 4; ++k)
+                        {
+                            const auto value = source[2 * (i + k)];
+                            out[i + k] = value;
+                            peaks[k] = juce::jmax (peaks[k], std::abs (value));
+                        }
+                    for (; i < frameSize; ++i)
+                    {
+                        const auto value = source[2 * i];
+                        out[i] = value;
+                        peaks[0] = juce::jmax (peaks[0], std::abs (value));
+                    }
+                    for (const auto value : peaks)
+                        peak = juce::jmax (peak, value);
                 }
 
                 target[0] = target[(size_t) frameSize];

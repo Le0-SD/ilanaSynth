@@ -11,6 +11,13 @@
 #include <complex>
 #include <vector>
 
+#if defined(_M_X64) || defined(__x86_64__) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2) || defined(__SSE2__)
+ #include <emmintrin.h>
+ #define TABLE_FFT_SSE2 1
+#else
+ #define TABLE_FFT_SSE2 0
+#endif
+
 class TableFFT
 {
 public:
@@ -42,6 +49,26 @@ public:
         for (int length = 2; length <= size; length <<= 1)
         {
             const auto half = length / 2, stride = size / length;
+           #if TABLE_FFT_SSE2
+            // One complex per SSE2 register, the same operations as below:
+            // br = yr wr - yi wi (as yr wr + -(yi wi), which IEEE defines as
+            // the same), bi = yr wi + yi wr. Bit for bit the scalar result.
+            auto* d = reinterpret_cast<double*> (data.data());
+            const auto signs = _mm_set_pd (1.0, -1.0);
+            for (int start = 0; start < size; start += length)
+                for (int k = 0; k < half; ++k)
+                {
+                    const auto& t = twiddles[(size_t) (k * stride)];
+                    const auto wr = _mm_set1_pd (t.real()), wi = _mm_set1_pd (inverse ? -t.imag() : t.imag());
+                    auto* x = d + 2 * (start + k);
+                    auto* y = d + 2 * (start + k + half);
+                    const auto yv = _mm_loadu_pd (y), xv = _mm_loadu_pd (x);
+                    const auto swapped = _mm_shuffle_pd (yv, yv, 1);
+                    const auto b = _mm_add_pd (_mm_mul_pd (yv, wr), _mm_mul_pd (_mm_mul_pd (swapped, wi), signs));
+                    _mm_storeu_pd (y, _mm_sub_pd (xv, b));
+                    _mm_storeu_pd (x, _mm_add_pd (xv, b));
+                }
+           #else
             for (int start = 0; start < size; start += length)
                 for (int k = 0; k < half; ++k)
                 {
@@ -53,6 +80,7 @@ public:
                     y = { x.real() - br, x.imag() - bi };
                     x = { x.real() + br, x.imag() + bi };
                 }
+           #endif
         }
 
         const auto scale = inverse ? 1.0 / size : 1.0;

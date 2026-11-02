@@ -834,27 +834,6 @@ private:
         }
     }
 
-    // Like processFilterPair: one filter while both sides are equal. The
-    // linear filters from equal states stay equal, so the right one follows
-    // by copy until the sides first differ.
-    static void processOpenPair (Airwindows::OpenLowPass& l, Airwindows::OpenLowPass& r, bool& linked,
-                                 float inLeft, float inRight, float& outLeft, float& outRight)
-    {
-        if (linked)
-        {
-            if (inLeft == inRight)
-            {
-                outLeft = outRight = l.process (inLeft);
-                return;
-            }
-
-            r = l;
-            linked = false;
-        }
-
-        outLeft = l.process (inLeft);
-        outRight = r.process (inRight);
-    }
 public:
     // Tests: run Filter 2 even when it is wide open.
     inline static bool disableOpenFilterBypass = false;
@@ -914,14 +893,20 @@ private:
         FilterUnit::processStereoBlock (left, right, inLeft + start, inRight + start, outLeft + start, outRight + start, n - start);
     }
 
+    // The open Y Low Pass pair over a block: one filter while both sides
+    // are equal (linear filters from equal states stay equal), the right one
+    // copied from it where the sides first differ.
     static void processOpenPairBlock (Airwindows::OpenLowPass& l, Airwindows::OpenLowPass& r, bool& linked,
                                       const float* inLeft, const float* inRight, float* outLeft, float* outRight, int n)
     {
         auto s = 0;
-        while (linked && s < n)
+        if (linked)
         {
-            processOpenPair (l, r, linked, inLeft[s], inRight[s], outLeft[s], outRight[s]);
-            ++s;
+            s = l.processLinkedRun (inLeft, inRight, outLeft, outRight, n);
+            if (s == n)
+                return;
+            r = l;
+            linked = false;
         }
         if (s < n)
             Airwindows::OpenLowPass::processPairBlock (l, r, inLeft + s, inRight + s, outLeft + s, outRight + s, n - s);

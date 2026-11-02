@@ -19,6 +19,7 @@
 
 #include "dsp/Biquad.h"
 #include "dsp/Generative.h"
+#include "dsp/FreeverbFast.h"
 #include "dsp/GranularPitchShift.h"
 #include "dsp/GranularSmear.h"
 #include "dsp/IlanaSynth.h"

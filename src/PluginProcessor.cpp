@@ -17,6 +17,10 @@ juce::AudioProcessorEditor* IlanaSynthAudioProcessor::createEditor()
 
 #include "processor/ProcessorInternal.h"
 
+#if defined(_M_X64) || defined(__x86_64__) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2) || defined(__SSE2__)
+ #include <emmintrin.h>
+#endif
+
 namespace
 {
 class WavetableSound : public juce::SynthesiserSound
@@ -2101,6 +2105,39 @@ void IlanaSynthAudioProcessor::processChunk (juce::AudioBuffer<float>& buffer, j
     const auto blockDc = [this, &buffer] (int stage)
     {
         const auto pole = (float) std::exp (-juce::MathConstants<double>::twoPi * 5.0 / juce::jmax (1.0, baseSampleRate));
+       #if defined(_M_X64) || defined(__x86_64__) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2) || defined(__SSE2__)
+        // Both sides at once, one SSE lane each: the same arithmetic as
+        // the loop below, bit for bit, with the two one-sample recursions
+        // side by side instead of one after the other.
+        if (buffer.getNumChannels() >= 2)
+        {
+            auto* left = buffer.getWritePointer (0);
+            auto* right = buffer.getWritePointer (1);
+            auto& stateL = dcBlock[stage][0];
+            auto& stateR = dcBlock[stage][1];
+            auto x1 = _mm_set_ps (0.0f, 0.0f, stateR[0], stateL[0]);
+            auto y1 = _mm_set_ps (0.0f, 0.0f, stateR[1], stateL[1]);
+            const auto poles = _mm_set1_ps (pole);
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+            {
+                const auto x = _mm_set_ps (0.0f, 0.0f, right[i], left[i]);
+                y1 = _mm_add_ps (_mm_sub_ps (x, x1), _mm_mul_ps (poles, y1));
+                x1 = x;
+                left[i] = _mm_cvtss_f32 (y1);
+                right[i] = _mm_cvtss_f32 (_mm_shuffle_ps (y1, y1, 1));
+            }
+            alignas (16) float xs[4], ys[4];
+            _mm_store_ps (xs, x1);
+            _mm_store_ps (ys, y1);
+            for (int channel = 0; channel < 2; ++channel)
+            {
+                auto& state = dcBlock[stage][(size_t) channel];
+                state[0] = std::isfinite (xs[channel]) ? xs[channel] : 0.0f;
+                state[1] = std::isfinite (ys[channel]) && std::abs (ys[channel]) > 1.0e-20f ? ys[channel] : 0.0f;
+            }
+            return;
+        }
+       #endif
         for (int channel = 0; channel < juce::jmin (2, buffer.getNumChannels()); ++channel)
         {
             auto* data = buffer.getWritePointer (channel);

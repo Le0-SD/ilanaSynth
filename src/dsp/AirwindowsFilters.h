@@ -386,6 +386,44 @@ public:
         return y;
     }
 
+    // process() over the samples where both sides are equal, from the start
+    // of the block, writing each output to both sides; returns how many.
+    // The state lives in locals for the run (the per-sample member reads and
+    // writes were the cost); the arithmetic is process()'s, bit for bit.
+    int processLinkedRun (const float* inL, const float* inR, float* outL, float* outR, int n)
+    {
+        const auto f0 = fixed[0], f1 = fixed[1], f2 = fixed[2], f3 = fixed[3], f4 = fixed[4];
+        const auto c1 = a1, c2 = a2, c3 = a3;
+        auto i1 = in1, i2 = in2, o1 = out1, o2 = out2, t1 = s1, t2 = s2;
+        auto i = 0;
+
+        for (; i < n; ++i)
+        {
+            const auto x = inL[i];
+            if (! (x == inR[i]))
+                break;
+
+            const auto b = x * f0 + i1;
+            i1 = x * f1 - b * f3 + i2;
+            i2 = x * f2 - b * f4;
+
+            const auto v3 = b - t2;
+            const auto v1 = c1 * t1 + c2 * v3;
+            const auto v2 = t2 + c2 * t1 + c3 * v3;
+            t1 = 2.0f * v1 - t1;
+            t2 = 2.0f * v2 - t2;
+
+            const auto y = v2 * f0 + o1;
+            o1 = v2 * f1 - y * f3 + o2;
+            o2 = v2 * f2 - y * f4;
+            outL[i] = y;
+            outR[i] = y;
+        }
+
+        in1 = i1; in2 = i2; out1 = o1; out2 = o2; s1 = t1; s2 = t2;
+        return i;
+    }
+
     // Two filters (left and right) over a block, as SSE lanes: the same
     // arithmetic as process(), lane by lane.
     static void processPairBlock (OpenLowPass& l, OpenLowPass& r, const float* inL, const float* inR,
