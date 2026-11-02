@@ -137,7 +137,8 @@ public:
     }
 
     // GPU drawing on macOS and Linux (settings menu > GPU rendering, saved as
-    // "gpuRendering", on by default; ILANA_NO_GPU=1 turns it off for a run).
+    // "gpuRendering", on by default on Linux and off on macOS, where it is
+    // slower than CoreGraphics; ILANA_NO_GPU=1 turns it off for a run).
     // Windows always draws with Direct2D, so these do nothing there.
     void setGpuRendering (bool shouldUseGpu);
     bool isGpuRendering() const;
