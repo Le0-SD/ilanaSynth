@@ -419,7 +419,7 @@ inline juce::String parse (const juce::File& file, Parsed& parsed)
     if (juce::String (raw, 4) != "RIFF" || juce::String (raw + 8, 4) != "sfbk")
         return "not a SoundFont";
 
-    for (const auto& list : children (raw + 8, (juce::uint32) juce::jmin<size_t> (u32 (raw + 4), block.getSize() - 8)))
+    for (const auto& list : children (raw + 8, (juce::uint32) std::min<size_t> (u32 (raw + 4), block.getSize() - 8)))
     {
         if (list.id != "LIST")
             continue;

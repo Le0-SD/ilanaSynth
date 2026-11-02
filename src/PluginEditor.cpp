@@ -2803,6 +2803,22 @@ void IlanaSynthAudioProcessorEditor::showUndoResult (const std::vector<float>& b
         return;
     }
 
+    // The knob the note names, when none that moved is on screen: the one on
+    // the first tab in the row that draws it (PLAY before a page behind the
+    // row, FILTER or OSC, which draw the same parameters). The knob list is
+    // in address order, so without this rank the page SHOW opened depended
+    // on the allocator (Linux chose PLAY, macOS the hidden FILTER page).
+    const auto rank = [this] (KnobControl& knob)
+    {
+        if (IlanaAnim::showing (knob))
+            return 0;
+        for (size_t s = 0; s < sections.size(); ++s)
+            for (int page = 0; page < sections[s]->getNumPages(); ++page)
+                if (auto* holder = sections[s]->getPage (page); holder != nullptr && holder->isParentOf (&knob))
+                    return (int) s < visibleTabCount ? 1 + (int) s : 1000 + (int) s;
+        return 10000;
+    };
+
     KnobControl* firstKnob = nullptr;
     for (auto index : changed)
     {
@@ -2817,7 +2833,7 @@ void IlanaSynthAudioProcessorEditor::showUndoResult (const std::vector<float>& b
 
             if (IlanaAnim::showing (*knob))
                 knob->flashChanged();
-            if (index == changed.front() && (firstKnob == nullptr || IlanaAnim::showing (*knob)))
+            if (index == changed.front() && (firstKnob == nullptr || rank (*knob) < rank (*firstKnob)))
                 firstKnob = knob;
         }
     }

@@ -4570,7 +4570,8 @@ int runUiTests()
         for (auto* knob : knobs)
             sampleShown = sampleShown || (knob->getParameterId() == "osc2_sample_start" && visibleInTree (knob));
         expect (processor.getBounceState() == IlanaSynthAudioProcessor::BounceState::Done && sampleShown,
-                "a bounce puts OSC 2 in Sample mode with the sample controls showing");
+                "a bounce puts OSC 2 in Sample mode with the sample controls showing (state "
+                    + juce::String ((int) processor.getBounceState()) + ", sample knobs " + (sampleShown ? "shown" : "hidden") + ")");
     }
 
     // Step 30: the sample display zooms, and a typed position sets START / END.
@@ -7898,7 +7899,7 @@ int runIdleCpu()
                 for (auto* child : top->getChildren())
                     if (child->isVisible())
                         std::cout << "    child " << typeid (*child).name() << " " << child->getBounds().toString() << std::endl;
-            for (size_t i = 0; i < juce::jmin<size_t> (40, sorted.size()); ++i)
+            for (size_t i = 0; i < std::min<size_t> (40, sorted.size()); ++i)
             {
                 const auto r = juce::Rectangle<int>::fromString (sorted[i].second);
                 auto* at = editor->getComponentAt (r.getCentre());

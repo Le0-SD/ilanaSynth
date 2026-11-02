@@ -360,7 +360,7 @@ struct OperatorEnvThumb
         valid = true;
         const auto run = OperatorEnv::run (settings);
         const auto total = juce::jmax (1.0, OperatorEnv::blocksToSeconds ((int) run.values.size() - 1));
-        const auto step = juce::jmax<size_t> (1, run.values.size() / 400);
+        const auto step = std::max<size_t> (1, run.values.size() / 400);
         points.clear();
 
         for (size_t i = 0; i < run.values.size(); i += step)

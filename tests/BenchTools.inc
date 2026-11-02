@@ -130,7 +130,7 @@ void runLibraryBench()
         sum += v;
     std::cout << "LIBRARY BENCH " << results.size() << " presets: median " << juce::String (values[values.size() / 2], 2)
               << " %, mean " << juce::String (sum / (double) values.size(), 2) << " %" << std::endl;
-    for (size_t i = 0; i < juce::jmin<size_t> (10, results.size()); ++i)
+    for (size_t i = 0; i < std::min<size_t> (10, results.size()); ++i)
         std::cout << "  slowest " << results[i].second << ": " << juce::String (results[i].first, 2) << " %" << std::endl;
 }
 
@@ -272,7 +272,7 @@ void runBodyBench()
                                                                       + ", bell " + juce::String (ms[3], 1) });
         }
         std::sort (rows.begin(), rows.end(), [] (const auto& a, const auto& b) { return a.first > b.first; });
-        for (size_t i = 0; i < juce::jmin<size_t> (25, rows.size()); ++i)
+        for (size_t i = 0; i < std::min<size_t> (25, rows.size()); ++i)
             std::cout << juce::String (rows[i].first, 2) << "x  " << rows[i].second << std::endl;
         return;
     }
