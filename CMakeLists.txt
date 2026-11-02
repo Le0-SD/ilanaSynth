@@ -106,6 +106,10 @@ juce_add_plugin(ilanaSynth
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     COPY_PLUGIN_AFTER_BUILD FALSE
+    # macOS: the Live oscillator mode opens the audio input, and the standalone
+    # is killed on first use without this usage string.
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "ilanaSynth plays the audio input through its Live oscillator mode."
     VST3_CATEGORIES Instrument Synth
 )
 
@@ -190,6 +194,8 @@ juce_add_plugin(ilanaSynthFX
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     COPY_PLUGIN_AFTER_BUILD FALSE
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "ilanaSynth FX processes the audio input through its bodies, strings, grains and filters."
     VST3_CATEGORIES Fx
 )
 
