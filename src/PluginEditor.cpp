@@ -10,6 +10,8 @@
 
 #include "PluginEditor.h"
 
+#include <set>
+
 #include <algorithm>
 #include <array>
 
@@ -835,6 +837,8 @@ IlanaSynthAudioProcessorEditor::IlanaSynthAudioProcessorEditor (IlanaSynthAudioP
     }
     content.addAndMakeVisible (tutorial);
     content.addChildComponent (undoToast);
+    routeBadgeWatch.tick = [this] { updateRouteBadges(); };
+    routeBadgeWatch.startTimerHz (15);
     undoToast.onUndo = [this]
     {
         undoOrRedo (false);
@@ -1026,6 +1030,7 @@ void IlanaSynthAudioProcessorEditor::closeSampleBrowser()
 
 IlanaSynthAudioProcessorEditor::~IlanaSynthAudioProcessorEditor()
 {
+    routeBadgeWatch.stopTimer();
     sampleBrowser.reset();
     zoneEditor.reset();
     setGpuRendering (false); // before any child goes: the render thread paints them
@@ -2418,10 +2423,190 @@ void IlanaSynthAudioProcessorEditor::undoOrRedo (bool redo)
     undoToastSkip = true;
     undoToast.hide();
 
-    if (redo)
-        processorRef.getUndoManager().redo();
+    // What the step moves, to show it afterwards (usability flair, pass 1).
+    auto& undoManager = processorRef.getUndoManager();
+    const auto step = redo ? undoManager.getRedoDescription() : undoManager.getUndoDescription();
+    const auto& parameters = processorRef.getParameters();
+    std::vector<float> before;
+    before.reserve ((size_t) parameters.size());
+    for (auto* parameter : parameters)
+        before.push_back (parameter->getValue());
+
+    const auto done = redo ? undoManager.redo() : undoManager.undo();
+
+    if (done)
+        juce::MessageManager::callAsync ([safeThis = juce::Component::SafePointer<IlanaSynthAudioProcessorEditor> (this), before, step, redo]
+        {
+            if (safeThis != nullptr)
+                safeThis->showUndoResult (before, step, redo);
+        });
+}
+
+// The tabs' route badges: for the hovered (else the pinned) mod source,
+// how many knobs on each main tab it drives. Recounted only when the
+// source or its routes change.
+void IlanaSynthAudioProcessorEditor::updateRouteBadges()
+{
+    const auto source = highlightedModSource() != 0 ? highlightedModSource() : pinnedModSource();
+    std::set<int> destinations;
+
+    if (source != 0)
+        for (int i = 0; i < Mod::maxSlots; ++i)
+        {
+            const auto slot = processorRef.readModSlot (i);
+            if ((int) slot.source == source && slot.destination != 0)
+                destinations.insert (slot.destination);
+        }
+
+    auto key = (juce::uint64) (juce::uint32) source * 0x9e3779b97f4a7c15ull;
+    for (auto destination : destinations)
+        key = key * 31u + (juce::uint64) destination;
+
+    if (key == routeBadgeKey && source == routeBadgeSource)
+        return;
+
+    routeBadgeKey = key;
+    routeBadgeSource = source;
+    auto& bar = tabs.getTabbedButtonBar();
+
+    for (size_t s = 0; s < sections.size(); ++s)
+    {
+        std::set<int> found;
+        if (! destinations.empty())
+        {
+            std::function<void (juce::Component&)> scan = [&] (juce::Component& parent)
+            {
+                for (auto* child : parent.getChildren())
+                {
+                    if (auto* knob = dynamic_cast<KnobControl*> (child))
+                        if (const auto destination = knob->getModDestination(); destination != 0 && destinations.count (destination) > 0)
+                            found.insert (destination);
+                    scan (*child);
+                }
+            };
+            scan (*sections[s]);
+        }
+
+        if (auto* button = bar.getTabButton ((int) s))
+        {
+            const auto count = (int) found.size();
+            if ((int) button->getProperties().getWithDefault ("routeCount", 0) != count)
+            {
+                button->getProperties().set ("routeCount", count);
+                button->getProperties().set ("routeColour", (juce::int64) modSourceColour (source).getARGB());
+                button->repaint();
+            }
+        }
+    }
+}
+
+// After an undo or redo: every knob it moved flashes once, and the undo
+// note names the first ("Undid F1 RESO 60 % to 25 %", "and 2 more"), with
+// a key that does the opposite; when that knob is on another page the note
+// says which and its key, SHOW, goes there.
+void IlanaSynthAudioProcessorEditor::showUndoResult (const std::vector<float>& before, const juce::String& step, bool redo)
+{
+    const auto& parameters = processorRef.getParameters();
+    std::vector<int> changed;
+    for (int i = 0; i < parameters.size() && i < (int) before.size(); ++i)
+        if (std::abs (parameters[i]->getValue() - before[(size_t) i]) > 1.0e-5f)
+            changed.push_back (i);
+
+    std::vector<KnobControl*> knobs;
+    std::function<void (juce::Component&)> collect = [&] (juce::Component& parent)
+    {
+        for (auto* child : parent.getChildren())
+        {
+            if (auto* knob = dynamic_cast<KnobControl*> (child))
+                knobs.push_back (knob);
+            collect (*child);
+        }
+    };
+    // (A tab that isn't open is out of the window's tree, so walk every page too.)
+    collect (content);
+    for (auto& section : sections)
+        for (int page = 0; page < section->getNumPages(); ++page)
+            if (auto* holder = section->getPage (page); holder != nullptr && ! content.isParentOf (holder))
+                collect (*holder);
+    std::sort (knobs.begin(), knobs.end());
+    knobs.erase (std::unique (knobs.begin(), knobs.end()), knobs.end());
+
+    const auto verb = juce::String (redo ? "Redid " : "Undid ");
+    const auto again = [this, redo] { undoOrRedo (! redo); };
+    const auto oppositeKey = juce::String (redo ? "UNDO" : "REDO");
+
+    if (changed.empty())
+    {
+        if (step.isNotEmpty())
+        {
+            undoToast.showNote (verb + step, oppositeKey, again);
+            layoutUndoToast();
+        }
+        return;
+    }
+
+    KnobControl* firstKnob = nullptr;
+    for (auto index : changed)
+    {
+        auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (parameters[index]);
+        if (parameter == nullptr)
+            continue;
+
+        for (auto* knob : knobs)
+        {
+            if (knob->getParameterId() != parameter->getParameterID())
+                continue;
+
+            if (IlanaAnim::showing (*knob))
+                knob->flashChanged();
+            if (index == changed.front() && (firstKnob == nullptr || IlanaAnim::showing (*knob)))
+                firstKnob = knob;
+        }
+    }
+
+    auto* first = parameters[changed.front()];
+    const auto name = firstKnob != nullptr && firstKnob->getLabelText().isNotEmpty() ? firstKnob->getLabelText().toUpperCase()
+                                                                                     : first->getName (40).toUpperCase();
+    const auto textOf = [first] (float value)
+    {
+        const auto label = first->getLabel();
+        return first->getText (value, 0) + (label.isNotEmpty() ? " " + label : juce::String());
+    };
+
+    auto note = verb + name;
+    std::function<void()> action = again;
+    auto key = oppositeKey;
+
+    if (firstKnob != nullptr && ! IlanaAnim::showing (*firstKnob))
+    {
+        // On another page: name the tab and offer to go there.
+        for (size_t s = 0; s < sections.size(); ++s)
+            for (int page = 0; page < sections[s]->getNumPages(); ++page)
+                if (auto* holder = sections[s]->getPage (page); holder != nullptr && holder->isParentOf (firstKnob))
+                {
+                    note << " on " << tabs.getTabNames()[(int) s];
+                    key = "SHOW";
+                    action = [safeThis = juce::Component::SafePointer<IlanaSynthAudioProcessorEditor> (this), id = sections[s]->getPageId (page),
+                              knob = juce::Component::SafePointer<KnobControl> (firstKnob)]
+                    {
+                        if (safeThis == nullptr)
+                            return;
+                        safeThis->showPage (id);
+                        if (knob != nullptr)
+                            juce::Timer::callAfterDelay (250, [knob] { if (knob != nullptr) knob->flashChanged(); });
+                    };
+                }
+    }
     else
-        processorRef.getUndoManager().undo();
+    {
+        note << "  " << textOf (before[(size_t) changed.front()]) << juce::String (juce::CharPointer_UTF8 ("  \xe2\x86\x92  ")) << textOf (first->getValue());
+    }
+
+    if (changed.size() > 1)
+        note << " and " << juce::String ((int) changed.size() - 1) << " more";
+
+    undoToast.showNote (note, key, action);
+    layoutUndoToast();
 }
 
 void IlanaSynthAudioProcessorEditor::savePreset()

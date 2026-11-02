@@ -919,6 +919,23 @@ public:
             getProperties().set ("dragGhostPos", (float) proportion);
             getProperties().set ("dragGhostRelease", 0.0);
         }
+
+        setFine (dragging && wantsFine (event.mods));
+    }
+
+    // A double-click reset glides back to the default like any value that
+    // moves by itself (the look-and-feel glides while this is recent).
+    void mouseDoubleClick (const juce::MouseEvent& event) override
+    {
+        getProperties().set ("resetGlideAt", juce::Time::getMillisecondCounterHiRes());
+        juce::Slider::mouseDoubleClick (event);
+    }
+
+    // Shift or Ctrl pressed or let go mid-drag: the knob's name says FINE.
+    void modifierKeysChanged (const juce::ModifierKeys& mods) override
+    {
+        juce::Slider::modifierKeysChanged (mods);
+        setFine (dragging && wantsFine (mods));
     }
 
     void mouseDrag (const juce::MouseEvent& event) override
@@ -926,6 +943,7 @@ public:
         if (! dragging)
             return;
 
+        setFine (wantsFine (event.mods));
         const auto step = (lastY - event.position.y) / fullRangePixels / (wantsFine (event.mods) ? fineDivisor : 1.0f);
         lastY = event.position.y;
         proportion = juce::jlimit (0.0, 1.0, proportion + (double) step);
@@ -944,6 +962,7 @@ public:
         }
 
         dragging = false;
+        setFine (false);
         juce::Slider::mouseUp (event);
         event.source.enableUnboundedMouseMovement (false);
         if (auto* owner = getParentComponent())
@@ -951,9 +970,22 @@ public:
     }
 
     bool isGrabbed() const { return dragging; }
+    // Dragging at a tenth of the speed (Shift or Ctrl held).
+    bool isFine() const { return fine; }
+    std::function<void()> onFineChanged;
 
 private:
-    bool dragging = false;
+    void setFine (bool shouldBeFine)
+    {
+        if (shouldBeFine == fine)
+            return;
+
+        fine = shouldBeFine;
+        if (onFineChanged != nullptr)
+            onFineChanged();
+    }
+
+    bool dragging = false, fine = false;
     float lastY = 0.0f;
     double proportion = 0.0;
 };
@@ -988,6 +1020,16 @@ public:
         label.setFont (IlanaTheme::font (IlanaTheme::TextSize::label, true).withKerningFactor (0.08f));
         label.setColour (juce::Label::textColourId, IlanaTheme::Ui::text3);
         addAndMakeVisible (label);
+
+        // Fine drag (Shift or Ctrl held): the name reads FINE in the accent
+        // until the key or the mouse is let go, so the slow knob doesn't
+        // feel stuck. (The label keeps its text; its ink hides and FINE is
+        // drawn over it.)
+        slider.onFineChanged = [this]
+        {
+            label.setColour (juce::Label::textColourId, slider.isFine() ? juce::Colours::transparentBlack : IlanaTheme::Ui::text3);
+            repaint();
+        };
 
         dotStrip.onDepthChange = [this] (int slot, float depth)
         {
@@ -1099,6 +1141,11 @@ public:
     juce::Label& getNameLabel() { return label; }
     bool isCompact() const { return compact; }
     const juce::String& getParameterId() const { return parameterId; }
+    // The mod destination its ring shows (0: none), so the tabs can count
+    // a source's routes per page.
+    int getModDestination() const { return ringConfig.destination; }
+    // Undo or redo moved this knob: it flashes once, as a preset load does.
+    void flashChanged() { startPulse (juce::Colours::white.withAlpha (0.9f)); }
     // The modulation destination whose depth the knob's ring shows (0: none).
     int getRingDestination() const { return ringConfig.destination; }
     int getNumRoutings() const { return (int) routings.size(); }
@@ -1669,10 +1716,12 @@ public:
         else
             IlanaTheme::drawFitted (g, value, inner.toNearestInt().expanded (1, 0), juce::Justification::centred, 1);
 
-        const auto name = label.getText();
+        const auto fine = slider.isFine();
+        const auto name = fine && label.getText().isNotEmpty() ? juce::String ("FINE") : label.getText();
         if (name.isNotEmpty() && ! packedNameArea.isEmpty())
         {
-            g.setColour (IlanaTheme::Ui::text3.interpolatedWith (IlanaTheme::Ui::text, grab).withMultipliedAlpha (on));
+            g.setColour (fine ? IlanaTheme::accent()
+                              : IlanaTheme::Ui::text3.interpolatedWith (IlanaTheme::Ui::text, grab).withMultipliedAlpha (on));
             // (Under the screen floor at a small zoom the same words are wider: no tracking, so neighbours' names keep apart.)
             const auto nameFont = IlanaTheme::font (packedNameUnits(), true);
             g.setFont (nameFont.withKerningFactor (nameFont.getHeight() > 6.2f ? 0.0f : 0.08f));
@@ -1817,6 +1866,13 @@ public:
         {
             paintPackedText (g);
             return;
+        }
+
+        if (slider.isFine() && label.isVisible() && ! label.getText().isEmpty())
+        {
+            g.setColour (IlanaTheme::accent());
+            g.setFont (label.getFont());
+            IlanaTheme::drawFitted (g, "FINE", label.getBounds(), label.getJustificationType(), 1);
         }
 
         if (! inlineText || inlineValueArea.isEmpty())

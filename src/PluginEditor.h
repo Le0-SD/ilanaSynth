@@ -179,6 +179,7 @@ private:
     void confirmReplacingPatch (const juce::String& replacement, const juce::String& confirmText,
                                 std::function<void (bool confirmed)> then);
     void undoOrRedo (bool redo);
+    void showUndoResult (const std::vector<float>& before, const juce::String& step, bool redo);
     juce::String undoToastKeyNow() const;
     void updateUndoToast();
     void layoutUndoToast();
@@ -229,6 +230,17 @@ private:
     InfoStrip infoStrip;
     TutorialOverlay tutorial;
     UndoToast undoToast;
+    // The main tabs' route badges (usability flair, pass 1): while a mod
+    // source is hovered or pinned, each tab counts the knobs it drives
+    // there. Polled about 15 times a second; recounted only on a change.
+    struct RouteBadgeWatch : juce::Timer
+    {
+        std::function<void()> tick;
+        void timerCallback() override { tick(); }
+    } routeBadgeWatch;
+    int routeBadgeSource = 0;
+    juce::uint64 routeBadgeKey = 0;
+    void updateRouteBadges();
     juce::String undoToastKey;
     bool undoToastSkip = false;
     ConfirmOverlay confirmOverlay;
