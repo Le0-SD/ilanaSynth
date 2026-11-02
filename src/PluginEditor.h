@@ -255,6 +255,11 @@ private:
     juce::Component::SafePointer<juce::Component> offGlowUnder;
     juce::Component::SafePointer<ToggleControl> offGlowSwitch;
     void updateOffSwitchGlow();
+    // Hovering a preset arrow: its tooltip (and the hover line) names the
+    // preset it goes to (usability flair, pass 3).
+    bool presetArrowsHovered = false;
+    int presetArrowsTipIndex = -2;
+    void updatePresetArrowTips();
     std::map<juce::String, int> sectionKnobCounts (const std::set<juce::String>& parameterIds, bool markAb);
     juce::String undoToastKey;
     bool undoToastSkip = false;
