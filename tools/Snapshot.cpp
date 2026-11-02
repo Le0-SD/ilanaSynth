@@ -9154,6 +9154,159 @@ int runUsability2 (const juce::File& outDir)
     return 0;
 }
 
+int runUsability3 (const juce::File& outDir)
+{
+    IlanaAnim::fullMotion() = true;
+    outDir.createDirectory();
+    IlanaSynthAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 256);
+    std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditor());
+    editor->setSize (1060, 720);
+#if JUCE_LINUX
+    if (auto* setHandler = (void* (*) (int (*) (void*, void*))) dlsym (RTLD_DEFAULT, "XSetErrorHandler"))
+        setHandler ([] (void*, void*) { return 0; });
+#endif
+    editor->addToDesktop (0);
+    editor->setVisible (true);
+    settle (800);
+    if (auto* tutorial = findChild<TutorialOverlay> (*editor))
+        tutorial->setVisible (false);
+    auto* shell = dynamic_cast<IlanaSynthAudioProcessorEditor*> (editor.get());
+    IlanaTheme::uiScaleRef() = IlanaTheme::uiScaleRef() * 1.75f;
+    IlanaTheme::notifyUiScaleListeners();
+
+    const auto shoot = [&] (const juce::String& name)
+    {
+        const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.75f);
+        juce::FileOutputStream stream (outDir.getChildFile (name + ".png"));
+        if (stream.openedOk())
+        {
+            stream.setPosition (0);
+            stream.truncate();
+            juce::PNGImageFormat().writeImageToStream (image, stream);
+        }
+        std::cout << name << std::endl;
+    };
+    const auto mouse = [&] (juce::Point<float> at, juce::ModifierKeys mods)
+    {
+        // (The real pointer too: isMouseOver and getMouseXYRelative ask X where it is.)
+        juce::Desktop::setMousePosition (editor->localPointToGlobal (at.roundToInt()));
+        if (auto* peer = editor->getPeer())
+            peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse, at, mods, juce::MouseInputSource::defaultPressure,
+                                    juce::MouseInputSource::defaultOrientation, juce::Time::currentTimeMillis());
+    };
+    const auto turn = [&] (const char* id, float plain)
+    {
+        if (auto* parameter = processor.apvts.getParameter (id))
+        {
+            processor.getUndoManager().beginNewTransaction();
+            parameter->beginChangeGesture();
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (plain));
+            parameter->endChangeGesture();
+            processor.getUndoManager().beginNewTransaction();
+        }
+    };
+    const auto knobFor = [&] (const juce::String& id) -> KnobControl*
+    {
+        std::vector<KnobControl*> knobs;
+        findAll<KnobControl> (*editor, knobs);
+        for (auto* knob : knobs)
+            if (knob->getParameterId() == id && visibleInTree (knob))
+                return knob;
+        return nullptr;
+    };
+
+    // A preset with LFO 1 routes on more than one page.
+    for (int index = 0; index < processor.getFactoryPresetNames().size(); ++index)
+    {
+        processor.loadFactoryPreset (index);
+        auto routes = 0;
+        for (int i = 0; i < Mod::maxSlots; ++i)
+            routes += processor.readModSlot (i).source == Mod::Source::Lfo1 ? 1 : 0;
+        if (routes >= 3)
+        {
+            std::cout << "preset: " << processor.getFactoryPresetNames()[index] << std::endl;
+            break;
+        }
+    }
+    shell->showPage ("MAIN");
+    settle (800);
+
+    // 1-2 Dragging CUTOFF: the hover line's full value mid-drag, then MAX at the top.
+    if (auto* knob = knobFor ("f1_cutoff"))
+    {
+        auto& slider = knob->getSlider();
+        const auto centre = editor->getLocalPoint (&slider, slider.getLocalBounds().getCentre()).toFloat();
+        const auto drag = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier);
+        mouse (centre, {});
+        settle (100);
+        mouse (centre, drag);
+        settle (60);
+        for (int i = 1; i <= 6; ++i)
+        {
+            mouse (centre.translated (0.0f, -4.0f * (float) i), drag);
+            settle (40);
+        }
+        settle (300);
+        shoot ("2-exact-value");
+        mouse (centre.translated (0.0f, -24.0f), {});
+        settle (300);
+        // (Faked drags past the window's edge don't reach the knob here: the
+        // value is put at the top and the knob told it was pushed past it,
+        // as KnobSlider::mouseDrag does.)
+        if (auto* parameter = processor.apvts.getParameter ("f1_cutoff"))
+            parameter->setValueNotifyingHost (1.0f);
+        settle (100);
+        if (auto* knobSlider = dynamic_cast<KnobSlider*> (&slider); knobSlider != nullptr && knobSlider->onEndHit != nullptr)
+            knobSlider->onEndHit (1);
+        settle (60);
+        shoot ("1-knob-end");
+        settle (700);
+        mouse ({ 2.0f, 700.0f }, {});
+        settle (300);
+    }
+
+    // 3 Hovering the next-preset arrow.
+    {
+        std::vector<juce::Button*> buttons;
+        findAll<juce::Button> (*editor, buttons);
+        for (auto* button : buttons)
+            if (button->getName() == "next" && visibleInTree (button))
+            {
+                mouse (editor->getLocalPoint (button, button->getLocalBounds().getCentre()).toFloat(), {});
+                break;
+            }
+        settle (900);
+        shoot ("3-preset-arrows");
+        mouse ({ 2.0f, 700.0f }, {});
+        settle (300);
+    }
+
+    // 4 Typing into CUTOFF: in range, then past the top.
+    if (auto* knob = knobFor ("f1_cutoff"))
+    {
+        knob->showTypedValueBox();
+        settle (200);
+        std::vector<juce::TextEditor*> editors;
+        findAll<juce::TextEditor> (*knob, editors);
+        if (! editors.empty())
+        {
+            editors.front()->setText ("2400", true);
+            settle (300);
+            shoot ("4-type-range");
+            editors.front()->setText ("99000", true);
+            settle (300);
+            shoot ("4-type-past");
+            if (editors.front()->onEscapeKey != nullptr)
+                editors.front()->onEscapeKey();
+        }
+        settle (300);
+    }
+
+    std::cout << "usability pass 3 frames in " << outDir.getFullPathName() << std::endl;
+    return 0;
+}
+
 // --usability <dir>: still frames of the usability flair at 175 % (pass 1:
 // the tabs' route badges, undo's note and flash, the default notch, FINE),
 // full window, for the PR's pictures.
@@ -9354,6 +9507,8 @@ int main (int argc, char** argv)
     if (juce::String (argv[1]) == "--uitest")
         return runUiTests();
 
+    if (juce::String (argv[1]) == "--usability3" && argc > 2)
+        return runUsability3 (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
     if (juce::String (argv[1]) == "--usability2" && argc > 2)
         return runUsability2 (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
     if (juce::String (argv[1]) == "--usability" && argc > 2)

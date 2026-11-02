@@ -10,6 +10,7 @@
 #include "ModNames.h"
 #include "ParamInfo.h"
 #include "ModulePool.h"
+#include "InfoStrip.h"
 
 struct ModRingConfig
 {
@@ -946,8 +947,17 @@ public:
         setFine (wantsFine (event.mods));
         const auto step = (lastY - event.position.y) / fullRangePixels / (wantsFine (event.mods) ? fineDivisor : 1.0f);
         lastY = event.position.y;
-        proportion = juce::jlimit (0.0, 1.0, proportion + (double) step);
+        // Pushed past an end: once per run into it, the knob says so.
+        const auto wanted = proportion + (double) step;
+        const auto end = wanted > 1.0 ? 1 : wanted < 0.0 ? -1 : 0;
+        if (end != 0 && end != lastEnd && onEndHit != nullptr)
+            onEndHit (end);
+        if (std::abs (step) > 0.0f)
+            lastEnd = end;
+        proportion = juce::jlimit (0.0, 1.0, wanted);
         setValue (proportionOfLengthToValue (proportion), juce::sendNotificationSync);
+        if (onDragValue != nullptr)
+            onDragValue();
 
         if (event.source.canDoUnboundedMovement())
             event.source.enableUnboundedMouseMovement (true, false);
@@ -962,6 +972,9 @@ public:
         }
 
         dragging = false;
+        lastEnd = 0;
+        if (onDragValue != nullptr)
+            onDragValue();
         setFine (false);
         juce::Slider::mouseUp (event);
         event.source.enableUnboundedMouseMovement (false);
@@ -973,6 +986,10 @@ public:
     // Dragging at a tenth of the speed (Shift or Ctrl held).
     bool isFine() const { return fine; }
     std::function<void()> onFineChanged;
+    // Pushed past its top (+1) or bottom (-1) during a drag.
+    std::function<void (int end)> onEndHit;
+    // Each step of a drag, and once more on the release (isGrabbed false).
+    std::function<void()> onDragValue;
 
 private:
     void setFine (bool shouldBeFine)
@@ -986,6 +1003,7 @@ private:
     }
 
     bool dragging = false, fine = false;
+    int lastEnd = 0;
     float lastY = 0.0f;
     double proportion = 0.0;
 };
@@ -1026,6 +1044,27 @@ public:
         // feel stuck. (The label keeps its text; its ink hides and FINE is
         // drawn over it.)
         slider.onFineChanged = [this] { updateNameInk(); };
+        slider.onEndHit = [this] (int end)
+        {
+            endHit = end;
+            endHitAt = juce::Time::getMillisecondCounterHiRes();
+            updateNameInk();
+        };
+        // While dragged, the hover line gives the full value and the default.
+        slider.onDragValue = [this]
+        {
+            if (! slider.isGrabbed())
+            {
+                InfoStrip::clear (*this);
+                return;
+            }
+            const auto name = label.getText().isNotEmpty() ? label.getText().toUpperCase() : getName().toUpperCase();
+            auto text = slider.getTextFromValue (slider.getValue());
+            if (slider.isDoubleClickReturnEnabled())
+                text << juce::String::fromUTF8 ("  \xc2\xb7  default ") << slider.getTextFromValue (slider.getDoubleClickReturnValue());
+            text << juce::String::fromUTF8 ("  \xc2\xb7  hold Shift for fine, double-click to reset");
+            InfoStrip::say (*this, name, text);
+        };
 
         dotStrip.onDepthChange = [this] (int slot, float depth)
         {
@@ -1162,8 +1201,42 @@ public:
     // source is drawn over it.
     void updateNameInk()
     {
-        const auto covered = slider.isFine() || hotRouting() != nullptr;
+        const auto covered = slider.isFine() || hotRouting() != nullptr || endName().isNotEmpty();
         label.setColour (juce::Label::textColourId, covered ? juce::Colours::transparentBlack : IlanaTheme::Ui::text3);
+        repaint();
+    }
+    // "MAX" or "MIN" for half a second after a drag runs into an end.
+    static constexpr double endShowMs = 500.0;
+    juce::String endName() const
+    {
+        if (endHit == 0 || juce::Time::getMillisecondCounterHiRes() - endHitAt > endShowMs)
+            return {};
+        return endHit > 0 ? "MAX" : "MIN";
+    }
+    // The end of the dial's arc flashes white, fading over that half second.
+    void paintEndFlash (juce::Graphics& g)
+    {
+        if (endHit == 0)
+            return;
+        const auto age = juce::Time::getMillisecondCounterHiRes() - endHitAt;
+        if (age > endShowMs)
+        {
+            endHit = 0;
+            updateNameInk();
+            return;
+        }
+        const auto fade = 1.0f - (float) (age / endShowMs);
+        const auto angle = endHit > 0 ? ringEnd : ringStart;
+        const auto centre = dialCentre();
+        const auto radius = dialRadius() * 0.86f;
+        const auto at = centre + juce::Point<float> (std::sin (angle), -std::cos (angle)) * radius;
+        for (int i = 3; i >= 1; --i)
+        {
+            g.setColour (juce::Colours::white.withAlpha (0.18f * fade / (float) i));
+            g.fillEllipse (juce::Rectangle<float> (6.0f + 5.0f * (float) i, 6.0f + 5.0f * (float) i).withCentre (at));
+        }
+        g.setColour (juce::Colours::white.withAlpha (fade));
+        g.fillEllipse (juce::Rectangle<float> (6.0f, 6.0f).withCentre (at));
         repaint();
     }
     juce::String hotSourceName (const ModDotStrip::Dot& dot) const
@@ -1427,15 +1500,62 @@ public:
         };
         editor.onEscapeKey = [this] { closeValueEditor(); };
         editor.onFocusLost = [this] { closeValueEditor(); };
+        editor.onTextChange = [this] { updateTypedHint(); };
         addAndMakeVisible (editor);
         editor.grabKeyboardFocus();
         editor.selectAll();
+        updateTypedHint();
+    }
+
+    // While a value is typed: the hover line says what the knob takes, and
+    // a number past either end turns the box red and says what Enter sets
+    // (usability flair, pass 3).
+    void updateTypedHint()
+    {
+        if (valueEditor == nullptr)
+            return;
+
+        const auto typed = valueEditor->getText().trim();
+        const auto name = label.getText().isNotEmpty() ? label.getText().toUpperCase() : getName().toUpperCase();
+        const auto low = slider.getTextFromValue (slider.getMinimum()), high = slider.getTextFromValue (slider.getMaximum());
+        const auto value = slider.getValueFromText (typed);
+        const auto shown = slider.getTextFromValue (value);
+        const auto atTop = value >= slider.getMaximum(), atBottom = value <= slider.getMinimum();
+
+        // The parser reads a bare number in whichever unit fits ("20000" is
+        // 20 kHz, "99000" may read as 990 Hz), so the line always says what
+        // Enter sets; red when that isn't the number typed (clamped at an
+        // end, or read in another unit).
+        auto differs = false;
+        if (typed.containsAnyOf ("0123456789"))
+        {
+            const auto typedNumber = typed.retainCharacters ("0123456789.-").getDoubleValue();
+            const auto shownNumber = shown.retainCharacters ("0123456789.-").getDoubleValue();
+            differs = true;
+            for (const auto scale : { 1.0, 1000.0, 0.001 })
+                if (std::abs (std::abs (typedNumber) * scale - std::abs (shownNumber)) <= 0.0051 * juce::jmax (1.0, std::abs (shownNumber)))
+                    differs = false; // (by size: a shown minus may be a true minus sign)
+        }
+
+        const auto red = juce::Colour (0xffff5656);
+        valueEditor->setColour (juce::TextEditor::outlineColourId, differs ? red : knobAccent);
+        valueEditor->setColour (juce::TextEditor::focusedOutlineColourId, differs ? red : knobAccent);
+        valueEditor->repaint();
+
+        const auto dot = juce::String::fromUTF8 ("  \xc2\xb7  ");
+        if (differs && (atTop || atBottom))
+            InfoStrip::say (*this, name, typed + (atTop ? " is above the top" : " is below the bottom") + ": Enter sets " + shown, true);
+        else if (differs)
+            InfoStrip::say (*this, name, "Enter sets " + shown + dot + "takes " + low + " to " + high, true);
+        else
+            InfoStrip::say (*this, name, "takes " + low + " to " + high + dot + "Enter sets " + shown + ", Esc cancels");
     }
 
     void closeValueEditor()
     {
         if (valueEditor == nullptr)
             return;
+        InfoStrip::clear (*this);
         auto old = std::move (valueEditor);
         removeChildComponent (old.get());
         // (Deleted after the callback that closed it returns.)
@@ -1725,6 +1845,10 @@ public:
         if (value.length() == 4 && juce::CharacterFunctions::isDigit (value[0]) && value[1] == '.')
             value = juce::String (value.getDoubleValue(), 1);
 
+        // (While a value is typed over the dial, the box is the value.)
+        if (valueEditor != nullptr)
+            value = unit = {};
+
         // A ring held or hovered: its depth in the dial, in the source's colour.
         const auto* hot = hotRouting();
         auto hotColour = juce::Colours::white;
@@ -1757,13 +1881,16 @@ public:
             IlanaTheme::drawFitted (g, value, inner.toNearestInt().expanded (1, 0), juce::Justification::centred, 1);
 
         const auto fine = slider.isFine();
-        const auto name = hot != nullptr && label.getText().isNotEmpty() ? hotSourceName (*hot)
-                          : fine && label.getText().isNotEmpty()            ? juce::String ("FINE")
-                                                                             : label.getText();
+        const auto atEnd = endName();
+        const auto name = hot != nullptr && label.getText().isNotEmpty()  ? hotSourceName (*hot)
+                          : atEnd.isNotEmpty() && label.getText().isNotEmpty() ? atEnd
+                          : fine && label.getText().isNotEmpty()             ? juce::String ("FINE")
+                                                                              : label.getText();
         if (name.isNotEmpty() && ! packedNameArea.isEmpty())
         {
-            g.setColour (hot != nullptr ? hotColour
-                         : fine         ? IlanaTheme::accent()
+            g.setColour (hot != nullptr        ? hotColour
+                         : atEnd.isNotEmpty() ? juce::Colours::white
+                         : fine               ? IlanaTheme::accent()
                                         : IlanaTheme::Ui::text3.interpolatedWith (IlanaTheme::Ui::text, grab).withMultipliedAlpha (on));
             // (Under the screen floor at a small zoom the same words are wider: no tracking, so neighbours' names keep apart.)
             const auto nameFont = IlanaTheme::font (packedNameUnits(), true);
@@ -1905,6 +2032,8 @@ public:
 
     void paintOverChildren (juce::Graphics& g) override
     {
+        paintEndFlash (g);
+
         if (diffMark)
         {
             const auto centre = dialCentre();
@@ -1925,6 +2054,12 @@ public:
             g.setColour (modSourceColour (hot->source));
             g.setFont (label.getFont());
             IlanaTheme::drawFitted (g, hotSourceName (*hot) + " " + hotDepthText (*hot) + "%", label.getBounds(), label.getJustificationType(), 1);
+        }
+        else if (const auto atEnd = endName(); atEnd.isNotEmpty() && label.isVisible() && ! label.getText().isEmpty())
+        {
+            g.setColour (juce::Colours::white);
+            g.setFont (label.getFont());
+            IlanaTheme::drawFitted (g, atEnd, label.getBounds(), label.getJustificationType(), 1);
         }
         else if (slider.isFine() && label.isVisible() && ! label.getText().isEmpty())
         {
@@ -2985,6 +3120,8 @@ private:
     float ringIn = 1.0f; // (a ring just added fades in)
     int hoveredRing = -1, draggedRing = -1;
     bool diffMark = false;
+    int endHit = 0;
+    double endHitAt = 0.0;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
 
     IlanaSynthAudioProcessor* processorRef = nullptr;

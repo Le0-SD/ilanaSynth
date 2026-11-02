@@ -19,6 +19,31 @@ class InfoStrip : public juce::Component,
                   private IlanaAnim::FrameTimer
 {
 public:
+    // A line a control says while you work it (a knob's full value during a
+    // drag, the range while you type one): shown at once, drag or not, in
+    // place of the hover text, until the control clears it (usability
+    // flair, pass 3). Message thread only; a window shows only its own.
+    struct Live
+    {
+        juce::Component::SafePointer<juce::Component> owner;
+        juce::String title, description;
+        bool warning = false;
+    };
+    static Live& live()
+    {
+        static Live line;
+        return line;
+    }
+    static void say (juce::Component& owner, const juce::String& title, const juce::String& description, bool warning = false)
+    {
+        live() = { &owner, title, description, warning };
+    }
+    static void clear (juce::Component& owner)
+    {
+        if (live().owner == &owner)
+            live() = {};
+    }
+
     InfoStrip()
     {
         setInterceptsMouseClicks (false, false);
@@ -74,7 +99,7 @@ public:
         const auto titleFont = juce::Font (IlanaTheme::font (IlanaTheme::TextSize::body, true));
         const auto titleWidth = juce::jmin (280, juce::GlyphArrangement::getStringWidthInt (titleFont, title) + 16);
 
-        g.setColour (IlanaTheme::accent());
+        g.setColour (warning ? juce::Colour (0xffff5656) : IlanaTheme::accent());
         g.setFont (titleFont);
         g.drawText (title, textArea.removeFromLeft (titleWidth), juce::Justification::centredLeft, true);
 
@@ -185,6 +210,32 @@ private:
 
     void step (juce::Component* under, bool dragging)
     {
+        // A control's live line wins, at once.
+        if (const auto& line = live(); line.owner != nullptr && line.title.isNotEmpty()
+                                       && line.owner->getTopLevelComponent() == getTopLevelComponent())
+        {
+            if (line.title != title || line.description != description || line.warning != warning)
+            {
+                title = pendingTitle = line.title;
+                description = pendingDescription = line.description;
+                warning = line.warning;
+                repaint();
+            }
+            restTicks = 6.0f;
+            target = 1.0f;
+            if (shown < 1.0f)
+            {
+                shown = 1.0f;
+                repaint();
+            }
+            return;
+        }
+        if (warning)
+        {
+            warning = false;
+            repaint();
+        }
+
         juce::String newTitle, newDescription;
 
         if (under != nullptr && ! dragging && ! wouldCover (under))
@@ -245,5 +296,5 @@ private:
     juce::String title, description, pendingTitle, pendingDescription;
     juce::Rectangle<int> quietArea;
     float shown = 0.0f, target = 0.0f, restTicks = 0.0f;
-    bool forced = false;
+    bool forced = false, warning = false;
 };

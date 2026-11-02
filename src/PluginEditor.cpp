@@ -837,7 +837,7 @@ IlanaSynthAudioProcessorEditor::IlanaSynthAudioProcessorEditor (IlanaSynthAudioP
     }
     content.addAndMakeVisible (tutorial);
     content.addChildComponent (undoToast);
-    routeBadgeWatch.tick = [this] { updateRouteBadges(); updateEditedAndAbMarks(); updateOffSwitchGlow(); };
+    routeBadgeWatch.tick = [this] { updateRouteBadges(); updateEditedAndAbMarks(); updateOffSwitchGlow(); updatePresetArrowTips(); };
     routeBadgeWatch.startTimerHz (15);
     undoToast.onUndo = [this]
     {
@@ -2724,6 +2724,38 @@ void IlanaSynthAudioProcessorEditor::updateOffSwitchGlow()
         if (target != nullptr)
             target->setCallGlow (true);
     }
+}
+
+void IlanaSynthAudioProcessorEditor::updatePresetArrowTips()
+{
+    const auto over = prevButton.isMouseOver() || nextButton.isMouseOver();
+    if (over == presetArrowsHovered && (! over || presetArrowsTipIndex == currentPresetIndex))
+        return;
+    presetArrowsHovered = over;
+    if (! over)
+        return;
+    presetArrowsTipIndex = currentPresetIndex; // (a click while hovering moves on: name the new neighbours)
+
+    // (Worked out as the mouse arrives, so the list is as the step would find it.)
+    createPresetPanel();
+    const auto names = processorRef.getAllPresetNames();
+    const auto categories = processorRef.getAllPresetCategories();
+    const auto banks = processorRef.getAllPresetBanks();
+    const auto describe = [&] (int delta, const juce::String& lead, const juce::String& key)
+    {
+        auto index = presetPanel->presetBeside (currentPresetIndex, delta);
+        if (index < 0 && names.size() > 0)
+            index = (juce::jmax (0, currentPresetIndex) + names.size() + delta) % names.size();
+        if (! juce::isPositiveAndBelow (index, names.size()))
+            return lead + " preset";
+        const auto bank = juce::isPositiveAndBelow (index, banks.size()) ? banks[index] : juce::String();
+        const auto name = bank.isNotEmpty() ? Presets::dx7DisplayName (names[index]) : names[index];
+        const auto category = juce::isPositiveAndBelow (index, categories.size()) ? categories[index].toUpperCase() : juce::String();
+        return lead + ": " + name + "\n" + (category.isNotEmpty() ? category + juce::String::fromUTF8 ("  \xc2\xb7  ") : juce::String())
+               + "click, or press the " + key + " arrow key";
+    };
+    prevButton.setTooltip (describe (-1, "Previous", "left"));
+    nextButton.setTooltip (describe (1, "Next", "right"));
 }
 
 // After an undo or redo: every knob it moved flashes once, and the undo
