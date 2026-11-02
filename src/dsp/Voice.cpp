@@ -115,6 +115,7 @@ constexpr float bodyAudioShare = 0.3f;
 
 Voice::Voice()
 {
+    filterDestinationMarks();
     if (fixedRandomSeeds().load())
     {
         random.setSeed (12345);
@@ -1320,7 +1321,8 @@ void Voice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer, int startSa
     // (or pedal) comes up; then it carries on from where it stopped.
     if (heldAsleep)
     {
-        if (noteHeld && ! monoPending && fadeTotal == 0 && heldSleepAllowed() && ! filterSettingsMoved())
+        if (noteHeld && ! monoPending && fadeTotal == 0 && heldSleepAllowed() && ! filterSettingsMoved()
+            && enabledOscillators() == sleptOscillators)
             return;
         heldAsleep = false;
         heldSilentSamples = 0;
@@ -1515,6 +1517,14 @@ void Voice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer, int startSa
 
             // A warped copy fades from the last one (UnisonBank::setWavetable).
             oscBank[osc].setWavetable (table, table != settings.baseTable);
+        }
+        else if (oscBank[osc].getWavetable() != nullptr)
+        {
+            // Not rendering: a spectral copy this bank holds (or fades from)
+            // can be freed before it plays again (SpectralCache keeps a
+            // replaced copy 3 s), and its pitch updates still read the table.
+            // It lets go, and takes its next table as it is, without a fade.
+            oscBank[osc].setWavetable (nullptr);
         }
 
     const auto configureStrings = [this] (int osc)
@@ -3026,6 +3036,7 @@ void Voice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer, int startSa
                        && ! legacyMaterialBody() && heldSleepAllowed();
     if (! watchHeldSilence)
         heldSilentSamples = 0;
+    heldSourcePeak = 0.0f;
 
     for (int chunkStart = 0; chunkStart < numSamples;)
     {
@@ -3303,6 +3314,8 @@ void Voice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer, int startSa
                             sideL *= trim;
                             sideR *= trim;
                         }
+                        if (watchHeldSilence)
+                            heldSourcePeak = juce::jmax (heldSourcePeak, std::abs (rawL) + std::abs (sideL), std::abs (rawR) + std::abs (sideR));
                         const auto raw = 0.5f * (rawL + rawR);
                         stringSum += raw;
 
@@ -3327,6 +3340,8 @@ void Voice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer, int startSa
                             raw *= trim;
                             side *= trim;
                         }
+                        if (watchHeldSilence)
+                            heldSourcePeak = juce::jmax (heldSourcePeak, std::abs (raw) + std::abs (side));
                         stringSum += raw;
 
                         const auto gain = unisonGains[osc][u] * renderLevel * enable * envFactor * keyGain;
@@ -3630,8 +3645,13 @@ void Voice::renderNextBlock (juce::AudioBuffer<float>& outputBuffer, int startSa
     }
     else if (watchHeldSilence)
     {
-        heldSilentSamples = releasePeak < releaseSilence ? heldSilentSamples + numSamples : 0;
+        // Silent at the output and at the strings themselves: an output
+        // held at zero by the amp (its DELAY, an MSEG, a route into a
+        // level) while the strings still ring is not a note that has died.
+        const auto silent = releasePeak < releaseSilence && heldSourcePeak < releaseSilence;
+        heldSilentSamples = silent ? heldSilentSamples + numSamples : 0;
         releasePeak = 0.0f;
+        heldSourcePeak = 0.0f;
         if (heldSilentSamples >= (int) (sampleRate * 0.09))
         {
             heldAsleep = true;
@@ -3969,23 +3989,7 @@ bool Voice::heldSleepAllowed() const
     }
     // A route into a filter or the WEST gate could push it into
     // self-oscillation while the note sleeps (its source doesn't run then).
-    static const auto filterDestinations = []
-    {
-        using D = Mod::Destination;
-        std::vector<bool> marks ((size_t) Mod::getNumDestinations(), false);
-        for (const auto d : { D::Filter1Cutoff, D::Filter1Reso, D::Filter2Cutoff, D::Filter2Reso, D::Filter1Drive, D::Filter2Drive,
-                              D::Filter1Env, D::Filter2Env, D::Filter1Fm, D::Filter2Fm, D::Filter1Morph, D::Filter2Morph })
-            marks[(size_t) d] = true;
-        const auto& list = Mod::getParamDestinations();
-        for (int i = 0; i < (int) list.size(); ++i)
-        {
-            const juce::String id (list[(size_t) i].id);
-            const auto d = Mod::paramDestinationFor (i);
-            if (d >= 0 && d < (int) marks.size() && (id.startsWith ("f1_") || id.startsWith ("f2_") || id.startsWith ("west_") || id.startsWith ("filter")))
-                marks[(size_t) d] = true;
-        }
-        return marks;
-    }();
+    const auto& filterDestinations = filterDestinationMarks();
     for (int slot = 0; slot < params.numModSlots; ++slot)
     {
         const auto d = params.modSlots[slot].destination;
@@ -3995,6 +3999,30 @@ bool Voice::heldSleepAllowed() const
     return true;
 }
 
+// The destinations that move a filter or the WEST gate (held sleep). Built
+// once, by the first Voice (on the message thread), not on the audio thread.
+const std::vector<bool>& Voice::filterDestinationMarks()
+{
+    static const auto marks = []
+    {
+        using D = Mod::Destination;
+        std::vector<bool> table ((size_t) Mod::getNumDestinations(), false);
+        for (const auto d : { D::Filter1Cutoff, D::Filter1Reso, D::Filter2Cutoff, D::Filter2Reso, D::Filter1Drive, D::Filter2Drive,
+                              D::Filter1Env, D::Filter2Env, D::Filter1Fm, D::Filter2Fm, D::Filter1Morph, D::Filter2Morph })
+            table[(size_t) d] = true;
+        const auto& list = Mod::getParamDestinations();
+        for (int i = 0; i < (int) list.size(); ++i)
+        {
+            const juce::String id (list[(size_t) i].id);
+            const auto d = Mod::paramDestinationFor (i);
+            if (d >= 0 && d < (int) table.size() && (id.startsWith ("f1_") || id.startsWith ("f2_") || id.startsWith ("west_") || id.startsWith ("filter")))
+                table[(size_t) d] = true;
+        }
+        return table;
+    }();
+    return marks;
+}
+
 void Voice::rememberFilterSettings()
 {
     sleptFilter1 = params.filter1;
@@ -4002,6 +4030,18 @@ void Voice::rememberFilterSettings()
     sleptWest = params.west;
     sleptFilterFm[0] = params.filter1Fm;
     sleptFilterFm[1] = params.filter2Fm;
+    sleptOscillators = enabledOscillators();
+}
+
+// Which oscillators are on, one bit each: one switched on (or back on) wakes
+// a sleeping note, as its string may still hold what it last played.
+int Voice::enabledOscillators() const
+{
+    auto mask = 0;
+    for (int osc = 0; osc < VoiceParams::numOscillators; ++osc)
+        if (params.oscillatorEnabled[osc])
+            mask |= 1 << osc;
+    return mask;
 }
 
 bool Voice::filterSettingsMoved() const

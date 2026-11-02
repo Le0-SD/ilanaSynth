@@ -947,6 +947,57 @@ void runHeldSleepFilterWakeTest()
     check (checked > 0, "some filter self-oscillates in the wake test (" + juce::String (checked) + " models)");
 }
 
+// Review 2026-11-01: held sleep listens to the strings, not only to the
+// output. A pluck the amp holds silent for its first second (amp DELAY), or
+// whose level a route holds at zero, still rings, so it must not sleep: it
+// sounds when the amp opens (or the route lets go), as it would awake.
+void runHeldSleepGainTest()
+{
+    const auto peakAfter = [] (int scenario, bool sleep)
+    {
+        Voice::disableHeldSilence = ! sleep;
+        IlanaSynthAudioProcessor processor;
+        processor.setNonRealtime (true);
+        setParam (processor, "sub_on", 0.0f);
+        setParam (processor, "osc1_mode", 1.0f);
+        setParam (processor, "osc1_excite", 0.0f);
+        setParam (processor, "osc1_string_decay", 0.9f);
+        if (scenario == 0)
+            setParam (processor, "amp_delay", 1.0f);
+        else
+        {
+            setParam (processor, "macro1", 1.0f);
+            processor.assignModSlot ((int) Mod::Source::Macro1, (int) Mod::Destination::Osc1Level, -1.0f);
+        }
+        processor.prepareToPlay (48000.0, 256);
+        juce::AudioBuffer<float> buffer (2, 256);
+        auto peak = 0.0f;
+        for (int block = 0; block < 300; ++block)
+        {
+            juce::MidiBuffer midi;
+            if (block == 0)
+                midi.addEvent (juce::MidiMessage::noteOn (1, 52, (juce::uint8) 100), 0);
+            if (scenario == 1 && block == 100)
+                setParam (processor, "macro1", 0.0f);
+            buffer.clear();
+            processor.processBlock (buffer, midi);
+            // (The amp opens at block 188, the route lets go at 100.)
+            if (block >= (scenario == 0 ? 190 : 102) && block < (scenario == 0 ? 290 : 202))
+                peak = juce::jmax (peak, buffer.getMagnitude (0, 0, 256));
+        }
+        Voice::disableHeldSilence = false;
+        return juce::Decibels::gainToDecibels (peak, -200.0f);
+    };
+    for (int scenario = 0; scenario < 2; ++scenario)
+    {
+        const auto awake = peakAfter (scenario, false), slept = peakAfter (scenario, true);
+        const juce::String what = scenario == 0 ? "an amp DELAY" : "a route holding the level at zero";
+        check (awake > -60.0f, "held sleep gain test: the pluck sounds after " + what + " (" + juce::String (awake, 1) + " dB)");
+        check (std::abs (slept - awake) < 0.5f, "a held pluck behind " + what + " does not sleep (" + juce::String (slept, 1)
+                                                    + " dB against " + juce::String (awake, 1) + " dB awake)");
+    }
+}
+
 // ILANA_STEREO_BENCH=1: what a stereo string route costs a whole voice (8 notes of a pluck and of the Piano
 // exciter, with and without a stereo route into DAMP), for docs/ROUTING-CPU.md.
 void runStereoStringBench()
@@ -1477,6 +1528,10 @@ void runPhase2StateAndCpuTest()
 // 2026-10-31: ramping Granular Pad's F2 KEY TRACK clicked once, at the crossing).
 void runFilter2CrossingTest()
 {
+    // The voices' free random (drift) changed the worst jump from run to run
+    // (1.7x to 4x on the same build): seeded, as the fingerprint build is.
+    fixedRandomSeeds() = true;
+    struct Restore { ~Restore() { fixedRandomSeeds() = false; } } restore;
     const auto worstClick = [] (bool bypass)
     {
         Voice::disableOpenFilterBypass = ! bypass;

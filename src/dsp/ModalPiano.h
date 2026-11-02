@@ -81,6 +81,7 @@ public:
     void prepare (double newSampleRate)
     {
         sampleRate = newSampleRate;
+        useAvx(); // (its first call reads the environment: here, not on the audio thread)
         designNoise();
         reset();
     }

@@ -1026,6 +1026,7 @@ private:
     bool watchHeldSilence = false, heldAsleep = false;
     int heldSilentSamples = 0;
     bool heldSleepAllowed() const;
+    static const std::vector<bool>& filterDestinationMarks();
     // A filter (or the WEST gate) can ring on its own from the strings'
     // last -110 dB residue once pushed into self-oscillation, so a sleeping
     // note wakes the block any filter or WEST setting moves, and never
@@ -1035,6 +1036,11 @@ private:
     float sleptFilterFm[2] {};
     void rememberFilterSettings();
     bool filterSettingsMoved() const;
+    int sleptOscillators = 0;
+    int enabledOscillators() const;
+    // The strings' own output over the block (before the levels and the
+    // amp): a note sleeps only once both it and the voice's output are silent.
+    float heldSourcePeak = 0.0f;
     // M8.1: simulated shapes, SMOOTH and output B for the per-voice LFOs.
     LfoSim lfoSims[VoiceParams::numLfos];
     LfoSmoother lfoSmoothers[VoiceParams::numLfos];
