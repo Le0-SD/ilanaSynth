@@ -109,7 +109,77 @@ juce::AudioProcessorValueTreeState::ParameterLayout IlanaSynthAudioProcessor::cr
                             if (describeValue (id, candidate) == typed)
                                 return candidate;
                         }
-                    return best;
+
+                    // No value shows the text as typed: read the number in a
+                    // unit the knob really shows, not whichever scale lands
+                    // in range (99000 on CUTOFF read as 990 Hz). The units
+                    // are the scales whose number reads back as the same
+                    // text somewhere on the knob ("Hz" 1 and "kHz" 1000 on a
+                    // cutoff, "%" 0.01 on a 0-1 amount); a typed unit ("k",
+                    // "ms") picks among them; past both ends the number
+                    // clamps to the nearer end.
+                    const auto unitWord = [] (const juce::String& text)
+                    {
+                        return text.retainCharacters ("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ%");
+                    };
+                    struct Unit { float scale; juce::String word; };
+                    std::vector<Unit> units;
+                    for (int k = 0; k <= 48; ++k)
+                    {
+                        const auto value = range.convertFrom0to1 ((float) k / 48.0f);
+                        const auto shown = describeValue (id, value);
+                        const auto shownNumbers = numbersIn (shown);
+                        if (shownNumbers.size() != 1 || shownNumbers.front() == 0.0f)
+                            continue;
+                        for (const auto scale : { 1.0f, 0.01f, 1000.0f, 0.001f, 100.0f })
+                        {
+                            // (Unclamped: at an end every scale would clamp back to it.)
+                            const auto scaled = shownNumbers.front() * scale;
+                            if (scaled < range.start || scaled > range.end
+                                || describeValue (id, range.snapToLegalValue (scaled)) != shown)
+                                continue;
+                            const Unit unit { scale, unitWord (shown) };
+                            if (std::none_of (units.begin(), units.end(), [&unit] (const Unit& u) { return u.scale == unit.scale && u.word == unit.word; }))
+                                units.push_back (unit);
+                        }
+                    }
+                    if (units.empty())
+                        return best;
+
+                    const auto typedWord = unitWord (typed);
+                    std::vector<Unit> chosen;
+                    if (typedWord.isNotEmpty())
+                        for (const auto& unit : units)
+                            if (unit.word.equalsIgnoreCase (typedWord) || unit.word.startsWithIgnoreCase (typedWord))
+                                chosen.push_back (unit);
+                    if (chosen.empty())
+                        chosen = units;
+
+                    const auto number = numbers.front();
+                    const auto inRange = [&range] (float v) { return v >= range.start && v <= range.end; };
+                    // In range and shown in the same unit first (5 on a
+                    // cutoff is 5 kHz, 500 is 500 Hz), then anything in range.
+                    for (const auto sameWord : { true, false })
+                        for (const auto& unit : chosen)
+                        {
+                            const auto candidate = number * unit.scale;
+                            if (inRange (candidate) && (! sameWord || unitWord (describeValue (id, candidate)) == unit.word))
+                                return range.snapToLegalValue (candidate);
+                        }
+                    // Past both ends: the end nearest the number as typed.
+                    auto clamped = range.start;
+                    auto miss = std::numeric_limits<float>::max();
+                    for (const auto& unit : chosen)
+                    {
+                        const auto candidate = number * unit.scale;
+                        const auto end = juce::jlimit (range.start, range.end, candidate);
+                        if (std::abs (candidate - end) < miss)
+                        {
+                            miss = std::abs (candidate - end);
+                            clamped = end;
+                        }
+                    }
+                    return range.snapToLegalValue (clamped);
                 })));
     };
 

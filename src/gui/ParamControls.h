@@ -1522,10 +1522,10 @@ public:
         const auto shown = slider.getTextFromValue (value);
         const auto atTop = value >= slider.getMaximum(), atBottom = value <= slider.getMinimum();
 
-        // The parser reads a bare number in whichever unit fits ("20000" is
-        // 20 kHz, "99000" may read as 990 Hz), so the line always says what
-        // Enter sets; red when that isn't the number typed (clamped at an
-        // end, or read in another unit).
+        // The parser reads a bare number in a unit the knob shows ("20000"
+        // is 20 kHz, "5" on a cutoff 5 kHz; "99000" clamps to the top), so
+        // the line always says what Enter sets; red when that isn't the
+        // number typed (clamped at an end, or read in another unit).
         auto differs = false;
         if (typed.containsAnyOf ("0123456789"))
         {
