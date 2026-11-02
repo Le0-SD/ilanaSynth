@@ -837,7 +837,7 @@ IlanaSynthAudioProcessorEditor::IlanaSynthAudioProcessorEditor (IlanaSynthAudioP
     }
     content.addAndMakeVisible (tutorial);
     content.addChildComponent (undoToast);
-    routeBadgeWatch.tick = [this] { updateRouteBadges(); };
+    routeBadgeWatch.tick = [this] { updateRouteBadges(); updateEditedAndAbMarks(); updateOffSwitchGlow(); };
     routeBadgeWatch.startTimerHz (15);
     undoToast.onUndo = [this]
     {
@@ -2500,6 +2500,232 @@ void IlanaSynthAudioProcessorEditor::updateRouteBadges()
     }
 }
 
+// Every main tab's knobs whose parameter is in the set, counted by the
+// tab's name; with markAb each knob also takes or drops the blue A|B mark.
+std::map<juce::String, int> IlanaSynthAudioProcessorEditor::sectionKnobCounts (const std::set<juce::String>& parameterIds, bool markAb)
+{
+    std::map<juce::String, int> counts;
+    const auto names = tabs.getTabNames();
+
+    for (size_t s = 0; s < sections.size(); ++s)
+    {
+        auto count = 0;
+        std::function<void (juce::Component&)> scan = [&] (juce::Component& parent)
+        {
+            for (auto* child : parent.getChildren())
+            {
+                if (auto* knob = dynamic_cast<KnobControl*> (child))
+                {
+                    const auto hit = parameterIds.count (knob->getParameterId()) > 0;
+                    count += hit ? 1 : 0;
+                    if (markAb)
+                        knob->setDiffMark (hit);
+                }
+                scan (*child);
+            }
+        };
+        scan (*sections[s]);
+        counts[names[(int) s]] = count;
+    }
+
+    return counts;
+}
+
+// The tabs' small dots: orange where a knob moved since the preset loaded
+// (or was saved), and, while A|B is hovered, blue where the other slot
+// differs (those knobs get a blue mark too, and A|B's tooltip names them).
+void IlanaSynthAudioProcessorEditor::updateEditedAndAbMarks()
+{
+    const auto& parameters = processorRef.getParameters();
+    auto& bar = tabs.getTabbedButtonBar();
+
+    // Edited since load: rescanned only when the patch's fingerprint moves.
+    const auto fingerprint = parameterFingerprint();
+    if (fingerprint != editedDotsKey)
+    {
+        editedDotsKey = fingerprint;
+        std::set<juce::String> edited;
+        const auto& loaded = processorRef.loadedPresetValues;
+        if (fingerprint != loadedFingerprint)
+            for (int i = 0; i < parameters.size() && i < (int) loaded.size(); ++i)
+                if (std::abs (parameters[i]->getValue() - loaded[(size_t) i]) > 1.0e-5f)
+                    if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (parameters[i]))
+                        edited.insert (ranged->getParameterID());
+
+        // (Dragging one knob keeps the same set: no rescan while it moves.)
+        auto setKey = (juce::uint64) edited.size();
+        for (const auto& id : edited)
+            setKey = setKey * 31u + (juce::uint64) id.hashCode64();
+        if (setKey == editedSetKey)
+            return updateAbMarks();
+        editedSetKey = setKey;
+
+        const auto counts = sectionKnobCounts (edited, false);
+        for (int t = 0; t < bar.getNumTabs(); ++t)
+            if (auto* button = bar.getTabButton (t))
+            {
+                const auto it = counts.find (tabs.getTabNames()[t]);
+                const auto n = it != counts.end() ? it->second : 0;
+                if ((int) button->getProperties().getWithDefault ("editedCount", 0) != n)
+                {
+                    button->getProperties().set ("editedCount", n);
+                    button->setTooltip (n > 0 ? juce::String (n) + (n == 1 ? " knob" : " knobs") + " changed on " + tabs.getTabNames()[t]
+                                                    + " since loading " + processorRef.getCurrentPresetName()
+                                              : juce::String());
+                    button->repaint();
+                }
+            }
+    }
+
+    updateAbMarks();
+}
+
+void IlanaSynthAudioProcessorEditor::updateAbMarks()
+{
+    auto& bar = tabs.getTabbedButtonBar();
+    // A|B: only while hovered and the other slot exists.
+    const auto& other = showingA ? slotB : slotA;
+    std::set<juce::String> differ;
+    if (abButton.isMouseOver() && other.isValid())
+        for (auto child : other)
+            if (child.hasType ("PARAM"))
+                if (auto* parameter = processorRef.apvts.getParameter (child["id"].toString()))
+                {
+                    const auto otherValue = parameter->convertTo0to1 ((float) child["value"]);
+                    if (std::abs (otherValue - parameter->getValue()) > 1.0e-4f)
+                        differ.insert (parameter->getParameterID());
+                }
+
+    auto key = (juce::uint64) differ.size() * 0x9e3779b97f4a7c15ull + (abButton.isMouseOver() ? 1u : 0u);
+    for (const auto& id : differ)
+        key = key * 31u + (juce::uint64) id.hashCode64();
+    if (key == abMarksKey)
+        return;
+    abMarksKey = key;
+
+    const auto counts = sectionKnobCounts (differ, true);
+    juce::StringArray names, where;
+    for (int t = 0; t < bar.getNumTabs(); ++t)
+        if (auto* button = bar.getTabButton (t))
+        {
+            const auto it = counts.find (tabs.getTabNames()[t]);
+            const auto n = it != counts.end() ? it->second : 0;
+            button->getProperties().set ("abCount", n);
+            button->repaint();
+            if (n > 0 && ! (bool) button->getProperties()["hiddenTab"])
+                where.add (tabs.getTabNames()[t]);
+        }
+
+    std::function<void (juce::Component&)> collect = [&] (juce::Component& parent)
+    {
+        for (auto* child : parent.getChildren())
+        {
+            if (auto* knob = dynamic_cast<KnobControl*> (child); knob != nullptr && differ.count (knob->getParameterId()) > 0)
+                names.addIfNotAlreadyThere (knob->getLabelText().toUpperCase());
+            collect (*child);
+        }
+    };
+    for (auto& section : sections)
+        collect (*section);
+
+    const auto base = juce::String ("Compare A | B\nFlip between two versions of the patch to compare them; the lit letter is the one playing.");
+    if (! other.isValid() || ! abButton.isMouseOver())
+        abButton.setTooltip (base);
+    else if (differ.empty())
+        abButton.setTooltip (juce::String (showingA ? "B" : "A") + " is the same as " + (showingA ? "A" : "B") + ".\n" + base);
+    else
+    {
+        auto list = names.size() > 6 ? names.joinIntoString (", ", 0, 6) + " and " + juce::String (names.size() - 6) + " more"
+                                     : names.joinIntoString (", ");
+        abButton.setTooltip (juce::String (showingA ? "B" : "A") + " differs from " + (showingA ? "A" : "B") + " in "
+                             + juce::String ((int) differ.size()) + (differ.size() == 1 ? " setting" : " settings")
+                             + (names.isEmpty() ? juce::String() : ": " + list) + (where.isEmpty() ? juce::String() : " (" + where.joinIntoString (", ") + ")")
+                             + "\n" + base);
+    }
+}
+
+// The control under the mouse, if it is greyed out (it or a box round it
+// drawn faded) and belongs to a module with an ON switch that is off: that
+// switch glows. A control's module is its parameter's prefix ("osc3_table"
+// is OSC 3's, switched by "osc3_on").
+void IlanaSynthAudioProcessorEditor::updateOffSwitchGlow()
+{
+    auto* under = juce::Desktop::getInstance().getMainMouseSource().getComponentUnderMouse();
+    ToggleControl* target = nullptr;
+
+    if (under != nullptr && isParentOf (under))
+    {
+        // (A greyed control often stops taking the mouse, so the component
+        // "under" it is its card: find the deepest one drawn there.)
+        std::function<juce::Component* (juce::Component&, juce::Point<int>)> deepest = [&] (juce::Component& parent, juce::Point<int> at) -> juce::Component*
+        {
+            for (int i = parent.getNumChildComponents(); --i >= 0;)
+                if (auto* child = parent.getChildComponent (i); child->isVisible() && child->getBounds().contains (at))
+                    return deepest (*child, at - child->getPosition());
+            return &parent;
+        };
+        auto* top = deepest (*under, under->getMouseXYRelative());
+        if (top == offGlowUnder.getComponent())
+            return;
+        offGlowUnder = top;
+
+        juce::String id;
+        auto dimmed = false;
+        for (auto* c = top; c != nullptr && c != this; c = c->getParentComponent())
+        {
+            dimmed = dimmed || c->getAlpha() < 0.95f || ! c->isEnabled();
+            if (id.isEmpty())
+            {
+                if (auto* knob = dynamic_cast<KnobControl*> (c))
+                    id = knob->getParameterId();
+                else if (auto* combo = dynamic_cast<ComboControl*> (c))
+                    id = combo->getParameterId();
+                else if (auto* toggle = dynamic_cast<ToggleControl*> (c); toggle != nullptr && ! toggle->getParameterId().endsWith ("_on"))
+                    id = toggle->getParameterId();
+            }
+        }
+
+        if (dimmed && id.isNotEmpty())
+        {
+            // (OSC 3 keeps its old "sub_" prefix, so the sub oscillator's
+            // three "sub_" knobs are its own; BODY is switched by "res_on".)
+            const auto subOscOwn = id == "sub_colour" || id == "sub_octave" || id == "sub_shape";
+            const auto switches = [&] (const juce::String& switchId)
+            {
+                const auto module = switchId.dropLastCharacters (3);
+                if (module == "subosc")
+                    return subOscOwn || id.startsWith ("subosc_");
+                if (module == "res")
+                    return id.startsWith ("body_");
+                return ! (module == "sub" && subOscOwn) && id.startsWith (module + "_");
+            };
+            std::function<void (juce::Component&)> find = [&] (juce::Component& parent)
+            {
+                for (auto* child : parent.getChildren())
+                {
+                    if (target != nullptr)
+                        return;
+                    if (auto* toggle = dynamic_cast<ToggleControl*> (child);
+                        toggle != nullptr && toggle->getParameterId().endsWith ("_on") && ! toggle->isOn()
+                        && switches (toggle->getParameterId()) && IlanaAnim::showing (*toggle))
+                        target = toggle;
+                    find (*child);
+                }
+            };
+            find (content);
+        }
+    }
+
+    if (target != offGlowSwitch.getComponent())
+    {
+        if (offGlowSwitch != nullptr)
+            offGlowSwitch->setCallGlow (false);
+        offGlowSwitch = target;
+        if (target != nullptr)
+            target->setCallGlow (true);
+    }
+}
+
 // After an undo or redo: every knob it moved flashes once, and the undo
 // note names the first ("Undid F1 RESO 60 % to 25 %", "and 2 more"), with
 // a key that does the opposite; when that knob is on another page the note
@@ -3914,6 +4140,9 @@ void IlanaSynthAudioProcessorEditor::rememberLoadedFingerprint()
 {
     loadedFingerprint = parameterFingerprint();
     processorRef.loadedPresetFingerprint = { processorRef.getCurrentPresetName(), loadedFingerprint };
+    processorRef.loadedPresetValues.clear();
+    for (auto* parameter : processorRef.getParameters())
+        processorRef.loadedPresetValues.push_back (parameter->getValue());
 }
 
 void IlanaSynthAudioProcessorEditor::adoptLoadedFingerprint()

@@ -491,6 +491,9 @@ public:
     // fingerprint when it was loaded or saved (kept here so it outlives the
     // editor). Message thread only.
     std::optional<std::pair<juce::String, juce::int64>> loadedPresetFingerprint;
+    // Every parameter's value (0..1, by index) at that load or save, for the
+    // tabs' edited-since-load dots. Message thread only.
+    std::vector<float> loadedPresetValues;
 
     unsigned getDataEpoch() const { return dataEpoch.load(); }
     // Counts sample loads (a new sample can reuse a freed one's address).
