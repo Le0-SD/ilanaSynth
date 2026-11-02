@@ -125,9 +125,79 @@ void runTextRoundTripTest()
                : " (" + juce::String (wrong.size()) + " wrong, e.g. " + wrong.joinIntoString ("; ").substring (0, 600) + ")"));
 }
 
+// A typed number past a knob's ends clamps to the nearer end in the knob's
+// own unit (ilana typed 99000 on CUTOFF and got 990 Hz), and a bare number
+// or a typed unit still reads as before.
+void runTypedValueTest()
+{
+    IlanaSynthAudioProcessor processor;
+    auto& state = processor.apvts;
+    const auto typed = [&state] (const juce::String& id, const juce::String& text)
+    {
+        auto* parameter = state.getParameter (id);
+        return parameter->getText (parameter->getValueForText (text), 1024);
+    };
+    const auto expect = [&typed] (const juce::String& id, const juce::String& text, const juce::String& shown)
+    {
+        const auto got = typed (id, text);
+        check (got == shown, id + ": typed '" + text + "' sets " + shown + " (got " + got + ")");
+    };
+    const auto top = [&state] (const juce::String& id) { auto* p = state.getParameter (id); return p->getText (1.0f, 1024); };
+    const auto bottom = [&state] (const juce::String& id) { auto* p = state.getParameter (id); return p->getText (0.0f, 1024); };
+
+    for (const auto* id : { "f1_cutoff", "f2_cutoff", "fx_filter_cutoff" })
+    {
+        expect (id, "99000", top (id));
+        expect (id, "99000 Hz", top (id));
+        expect (id, "99 kHz", top (id));
+        expect (id, "1000000", top (id));
+        expect (id, "5", typed (id, "5 kHz"));
+        expect (id, "500", typed (id, "500 Hz"));
+        expect (id, "20000", top (id));
+        expect (id, "2k", typed (id, "2 kHz"));
+        expect (id, "3", typed (id, "3 kHz"));
+        expect (id, "0.001", bottom (id));
+        expect (id, "-50", bottom (id));
+    }
+    expect ("amp_release", "99999", top ("amp_release"));
+    expect ("amp_release", "250", typed ("amp_release", "250 ms"));
+    expect ("amp_attack", "-3", bottom ("amp_attack"));
+    expect ("sub_level", "150", top ("sub_level"));
+    expect ("sub_level", "50", typed ("sub_level", "50 %"));
+    expect ("sub_level", "-20", bottom ("sub_level"));
+
+    // Every knob that shows one rising number with a unit: its top number
+    // times 10000, typed bare, sets the top in any of its units (the quirk
+    // was a smaller unit that happened to land in range).
+    juce::StringArray wrong;
+    for (auto* parameter : processor.getParameters())
+    {
+        auto* ranged = dynamic_cast<juce::AudioParameterFloat*> (parameter);
+        if (ranged == nullptr)
+            continue;
+        const auto high = parameter->getText (1.0f, 1024), low = parameter->getText (0.0f, 1024);
+        const auto highNumber = high.retainCharacters ("0123456789.").getFloatValue();
+        const auto lowNumber = low.retainCharacters ("0123456789.").getFloatValue();
+        if (high.containsAnyOf ("-+") || low.containsAnyOf ("-+") || ! high.containsAnyOf ("0123456789")
+            || highNumber <= 0.0f || high.retainCharacters ("0123456789").isEmpty()
+            || high.retainCharacters ("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ%") == "")
+            continue;
+        // Rising display (a number that falls as the knob turns is left alone).
+        if (lowNumber > highNumber && low.retainCharacters ("kms") == high.retainCharacters ("kms"))
+            continue;
+        const auto text = juce::String ((juce::int64) std::llround (highNumber * 10000.0f));
+        const auto got = parameter->getText (parameter->getValueForText (text), 1024);
+        if (got != high)
+            wrong.add (ranged->paramID + " '" + text + "' -> '" + got + "' (top '" + high + "')");
+    }
+    check (wrong.isEmpty(), "a number far past a knob's top sets its top" + (wrong.isEmpty() ? juce::String()
+               : " (" + juce::String (wrong.size()) + " wrong, e.g. " + wrong.joinIntoString ("; ").substring (0, 1500) + ")"));
+}
+
 void runTests()
 {
     runTextRoundTripTest();
+    runTypedValueTest();
     runUniqueIdTest();
     runPresetIdTest();
     runBouncePresetTest();
