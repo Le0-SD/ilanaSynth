@@ -891,7 +891,12 @@ IlanaSynthAudioProcessorEditor::IlanaSynthAudioProcessorEditor (IlanaSynthAudioP
     displayScaleApplied = settings->containsKey ("uiZoom") && ! juce::approximatelyEqual (uiZoom, 1.0f);
 
     headerScope.setVisible (settings->getBoolValue ("headerWaveform", true));
-    setGpuRendering (settings->getBoolValue ("gpuRendering", true)
+    // Off by default on macOS: JUCE's OpenGL renderer rasterises paths on the
+    // CPU and uploads them through Apple's OpenGL-on-Metal layer, and measured
+    // on an M4 (ilanaSnapshot --fps) it ran at 5-25 fps where CoreGraphics
+    // reaches 45-60. Linux keeps it on. The settings menu still offers it.
+    const auto gpuByDefault = ! (bool) JUCE_MAC;
+    setGpuRendering (settings->getBoolValue ("gpuRendering", gpuByDefault)
                      && juce::SystemStats::getEnvironmentVariable ("ILANA_NO_GPU", "").isEmpty());
 
     tabs.getTabbedButtonBar().addChangeListener (this);
