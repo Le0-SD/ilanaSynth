@@ -1025,11 +1025,7 @@ public:
         // until the key or the mouse is let go, so the slow knob doesn't
         // feel stuck. (The label keeps its text; its ink hides and FINE is
         // drawn over it.)
-        slider.onFineChanged = [this]
-        {
-            label.setColour (juce::Label::textColourId, slider.isFine() ? juce::Colours::transparentBlack : IlanaTheme::Ui::text3);
-            repaint();
-        };
+        slider.onFineChanged = [this] { updateNameInk(); };
 
         dotStrip.onDepthChange = [this] (int slot, float depth)
         {
@@ -1144,6 +1140,40 @@ public:
     // The mod destination its ring shows (0: none), so the tabs can count
     // a source's routes per page.
     int getModDestination() const { return ringConfig.destination; }
+    // A|B hovered and this knob differs in the other slot: a small blue dot
+    // over the dial (usability flair, pass 2).
+    void setDiffMark (bool shouldMark)
+    {
+        if (diffMark != shouldMark)
+        {
+            diffMark = shouldMark;
+            repaint();
+        }
+    }
+    static juce::Colour diffMarkColour() { return juce::Colour (0xff5aa0ff); }
+    // The ring under the mouse or being dragged (-1 for none): the knob
+    // shows that routing's depth and source in place of its value and name.
+    const ModDotStrip::Dot* hotRouting() const
+    {
+        const auto ring = draggedRing >= 0 ? draggedRing : hoveredRing;
+        return juce::isPositiveAndBelow (ring, (int) routings.size()) ? &routings[(size_t) ring] : nullptr;
+    }
+    // A plain knob's name hides its own ink while FINE or a held ring's
+    // source is drawn over it.
+    void updateNameInk()
+    {
+        const auto covered = slider.isFine() || hotRouting() != nullptr;
+        label.setColour (juce::Label::textColourId, covered ? juce::Colours::transparentBlack : IlanaTheme::Ui::text3);
+        repaint();
+    }
+    juce::String hotSourceName (const ModDotStrip::Dot& dot) const
+    {
+        return ModNames::source (dot.source, processorRef).toUpperCase();
+    }
+    juce::String hotDepthText (const ModDotStrip::Dot& dot) const
+    {
+        return (dot.depth >= 0.0f ? "+" : "") + juce::String (Mod::shownPercent (dot.depth, dot.bipolar));
+    }
     // Undo or redo moved this knob: it flashes once, as a preset load does.
     void flashChanged() { startPulse (juce::Colours::white.withAlpha (0.9f)); }
     // The modulation destination whose depth the knob's ring shows (0: none).
@@ -1695,9 +1725,19 @@ public:
         if (value.length() == 4 && juce::CharacterFunctions::isDigit (value[0]) && value[1] == '.')
             value = juce::String (value.getDoubleValue(), 1);
 
+        // A ring held or hovered: its depth in the dial, in the source's colour.
+        const auto* hot = hotRouting();
+        auto hotColour = juce::Colours::white;
+        if (hot != nullptr)
+        {
+            value = hotDepthText (*hot);
+            unit = "%";
+            hotColour = modSourceColour (hot->source);
+        }
+
         // Grabbed, the number grows a little and the name turns white; released, both settle back (~150 ms).
         const auto grab = IlanaTheme::fade (const_cast<KnobControl&> (*this), 77, slider.isGrabbed() ? 1.0f : 0.0f, 24.0f);
-        g.setColour (IlanaTheme::Ui::text.withMultipliedAlpha (on));
+        g.setColour ((hot != nullptr ? hotColour : IlanaTheme::Ui::text).withMultipliedAlpha (on));
         const auto drawn = IlanaTheme::font (packedD * kPackedValueScale * (1.0f + 0.07f * grab), true, true);
         g.setFont (drawn);
         if (unit.isNotEmpty())
@@ -1710,18 +1750,21 @@ public:
             const auto box = inner.toNearestInt().expanded (1, 0);
             IlanaTheme::drawFitted (g, value, juce::Rectangle<float> (box.getX(), top, box.getWidth(), numberH).toNearestInt(), juce::Justification::centred, 1);
             g.setFont (unitFont);
-            g.setColour (IlanaTheme::Ui::text2.withMultipliedAlpha (on));
+            g.setColour ((hot != nullptr ? hotColour : IlanaTheme::Ui::text2).withMultipliedAlpha (on));
             IlanaTheme::drawFitted (g, unit, juce::Rectangle<float> (box.getX(), top + numberH - 1.0f, box.getWidth(), unitFont.getHeight()).toNearestInt(), juce::Justification::centred, 1);
         }
         else
             IlanaTheme::drawFitted (g, value, inner.toNearestInt().expanded (1, 0), juce::Justification::centred, 1);
 
         const auto fine = slider.isFine();
-        const auto name = fine && label.getText().isNotEmpty() ? juce::String ("FINE") : label.getText();
+        const auto name = hot != nullptr && label.getText().isNotEmpty() ? hotSourceName (*hot)
+                          : fine && label.getText().isNotEmpty()            ? juce::String ("FINE")
+                                                                             : label.getText();
         if (name.isNotEmpty() && ! packedNameArea.isEmpty())
         {
-            g.setColour (fine ? IlanaTheme::accent()
-                              : IlanaTheme::Ui::text3.interpolatedWith (IlanaTheme::Ui::text, grab).withMultipliedAlpha (on));
+            g.setColour (hot != nullptr ? hotColour
+                         : fine         ? IlanaTheme::accent()
+                                        : IlanaTheme::Ui::text3.interpolatedWith (IlanaTheme::Ui::text, grab).withMultipliedAlpha (on));
             // (Under the screen floor at a small zoom the same words are wider: no tracking, so neighbours' names keep apart.)
             const auto nameFont = IlanaTheme::font (packedNameUnits(), true);
             g.setFont (nameFont.withKerningFactor (nameFont.getHeight() > 6.2f ? 0.0f : 0.08f));
@@ -1862,13 +1905,28 @@ public:
 
     void paintOverChildren (juce::Graphics& g) override
     {
+        if (diffMark)
+        {
+            const auto centre = dialCentre();
+            const auto top = juce::jmax (4.0f, centre.y - outerRingRadius() - 4.0f);
+            g.setColour (diffMarkColour());
+            g.fillEllipse (juce::Rectangle<float> (7.0f, 7.0f).withCentre ({ centre.x, top }));
+        }
+
         if (packedD > 0.0f)
         {
             paintPackedText (g);
             return;
         }
 
-        if (slider.isFine() && label.isVisible() && ! label.getText().isEmpty())
+        if (const auto* hot = hotRouting(); hot != nullptr && label.isVisible() && ! label.getText().isEmpty())
+        {
+            // (A plain knob says it on its name's line: "LFO 1 +35%".)
+            g.setColour (modSourceColour (hot->source));
+            g.setFont (label.getFont());
+            IlanaTheme::drawFitted (g, hotSourceName (*hot) + " " + hotDepthText (*hot) + "%", label.getBounds(), label.getJustificationType(), 1);
+        }
+        else if (slider.isFine() && label.isVisible() && ! label.getText().isEmpty())
         {
             g.setColour (IlanaTheme::accent());
             g.setFont (label.getFont());
@@ -2245,6 +2303,7 @@ private:
             }
 
             owner.draggedRing = ring;
+            owner.updateNameInk();
             dragSlot = owner.routings[(size_t) ring].slot;
             dragStartDepth = owner.routings[(size_t) ring].depth;
 
@@ -2277,7 +2336,7 @@ private:
                 owner.dotStrip.onDragEnd();
 
             owner.draggedRing = -1;
-            owner.repaint();
+            owner.updateNameInk();
         }
 
         void mouseDoubleClick (const juce::MouseEvent& event) override
@@ -2300,6 +2359,7 @@ private:
                 return;
 
             owner.hoveredRing = ring;
+            owner.updateNameInk();
             setMouseCursor (ring >= 0 ? juce::MouseCursor::UpDownLeftRightResizeCursor : juce::MouseCursor::NormalCursor);
             updateTooltip (ring);
             owner.repaint();
@@ -2924,6 +2984,7 @@ private:
     std::vector<float> liveValues;
     float ringIn = 1.0f; // (a ring just added fades in)
     int hoveredRing = -1, draggedRing = -1;
+    bool diffMark = false;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
 
     IlanaSynthAudioProcessor* processorRef = nullptr;
@@ -3773,6 +3834,31 @@ public:
 
     bool isSwitch() const { return button.getProperties().contains ("switch"); }
     const juce::String& getParameterId() const { return parameterId; }
+    bool isOn() const { return button.getToggleState(); }
+    // Something greyed out because this switch is off is hovered: the switch
+    // glows so you see what turns it on (usability flair, pass 2).
+    void setCallGlow (bool shouldGlow)
+    {
+        if (callGlow != shouldGlow)
+        {
+            callGlow = shouldGlow;
+            repaint();
+        }
+    }
+
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        const auto glow = IlanaTheme::fade (*this, 950, callGlow ? 1.0f : 0.0f, 22.0f);
+        if (glow > 0.01f)
+        {
+            const auto area = button.getBounds().toFloat().reduced (0.5f);
+            IlanaTheme::paintGlow (g, area, area.getHeight() * 0.5f, IlanaTheme::accent(), glow * 2.5f);
+            g.setColour (IlanaTheme::accent().withMultipliedAlpha (glow));
+            g.drawRoundedRectangle (area.reduced (0.5f), area.getHeight() * 0.5f, 2.0f);
+        }
+        if (glow > 0.01f && glow < 0.99f)
+            repaint();
+    }
 
     // (Every toggle is a switch now; kept for the call sites that ask.)
     void showAsSwitch()
@@ -3895,6 +3981,7 @@ public:
 private:
     int switchDrop = 0, nameDrop = 0;
     bool inlineLabel = false, groupStyle = false, bareSwitch = false, smallName = false;
+    bool callGlow = false;
     NamePlace packedPlace = NamePlace::none;
     float rightNameSize = 7.3f, belowNameSize = 0.0f;
     juce::Colour groupColour;

@@ -1216,6 +1216,26 @@ public:
         if (badge > 0.01f && badge < 0.99f)
             button.repaint();
 
+        // A small dot where the badge goes while none shows: blue while A|B
+        // is hovered and the other slot differs here, else orange where a
+        // knob moved since the preset loaded (pass 2; the editor sets
+        // "abCount" and "editedCount").
+        {
+            const auto ab = (int) button.getProperties().getWithDefault ("abCount", 0) > 0;
+            const auto edited = (int) button.getProperties().getWithDefault ("editedCount", 0) > 0;
+            const auto dotOn = IlanaTheme::fade (button, 904, (ab || edited) && routes == 0 ? 1.0f : 0.0f, 22.0f);
+            if (dotOn > 0.01f)
+            {
+                const auto textWidth = juce::GlyphArrangement::getStringWidth (juce::Font (tabFont()), button.getButtonText());
+                const auto dot = juce::Rectangle<float> (7.0f, 7.0f).withCentre ({ bounds.getCentreX() + textWidth * 0.5f + 4.5f, bounds.getCentreY() - 9.0f })
+                                     .constrainedWithin (bounds.reduced (0.5f));
+                g.setColour ((ab ? juce::Colour (0xff5aa0ff) : IlanaTheme::accent()).withMultipliedAlpha (dotOn));
+                g.fillEllipse (dot);
+            }
+            if (dotOn > 0.01f && dotOn < 0.99f)
+                button.repaint();
+        }
+
         // (The underline is the bar's: drawTabAreaBehindFrontButton.)
 
         if ((hover > 0.01f && hover < 0.99f) || (lit > 0.01f && lit < 0.99f))

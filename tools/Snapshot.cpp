@@ -9000,6 +9000,160 @@ int runFlair (const juce::File& outDir)
     return 0;
 }
 
+int runUsability2 (const juce::File& outDir)
+{
+    IlanaAnim::fullMotion() = true;
+    outDir.createDirectory();
+    IlanaSynthAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 256);
+    std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditor());
+    editor->setSize (1060, 720);
+#if JUCE_LINUX
+    if (auto* setHandler = (void* (*) (int (*) (void*, void*))) dlsym (RTLD_DEFAULT, "XSetErrorHandler"))
+        setHandler ([] (void*, void*) { return 0; });
+#endif
+    editor->addToDesktop (0);
+    editor->setVisible (true);
+    settle (800);
+    if (auto* tutorial = findChild<TutorialOverlay> (*editor))
+        tutorial->setVisible (false);
+    auto* shell = dynamic_cast<IlanaSynthAudioProcessorEditor*> (editor.get());
+    IlanaTheme::uiScaleRef() = IlanaTheme::uiScaleRef() * 1.75f;
+    IlanaTheme::notifyUiScaleListeners();
+
+    const auto shoot = [&] (const juce::String& name)
+    {
+        const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.75f);
+        juce::FileOutputStream stream (outDir.getChildFile (name + ".png"));
+        if (stream.openedOk())
+        {
+            stream.setPosition (0);
+            stream.truncate();
+            juce::PNGImageFormat().writeImageToStream (image, stream);
+        }
+        std::cout << name << std::endl;
+    };
+    const auto mouse = [&] (juce::Point<float> at, juce::ModifierKeys mods)
+    {
+        // (The real pointer too: isMouseOver and getMouseXYRelative ask X where it is.)
+        juce::Desktop::setMousePosition (editor->localPointToGlobal (at.roundToInt()));
+        if (auto* peer = editor->getPeer())
+            peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse, at, mods, juce::MouseInputSource::defaultPressure,
+                                    juce::MouseInputSource::defaultOrientation, juce::Time::currentTimeMillis());
+    };
+    const auto turn = [&] (const char* id, float plain)
+    {
+        if (auto* parameter = processor.apvts.getParameter (id))
+        {
+            processor.getUndoManager().beginNewTransaction();
+            parameter->beginChangeGesture();
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (plain));
+            parameter->endChangeGesture();
+            processor.getUndoManager().beginNewTransaction();
+        }
+    };
+    const auto knobFor = [&] (const juce::String& id) -> KnobControl*
+    {
+        std::vector<KnobControl*> knobs;
+        findAll<KnobControl> (*editor, knobs);
+        for (auto* knob : knobs)
+            if (knob->getParameterId() == id && visibleInTree (knob))
+                return knob;
+        return nullptr;
+    };
+
+    // A preset with LFO 1 routes on more than one page.
+    for (int index = 0; index < processor.getFactoryPresetNames().size(); ++index)
+    {
+        processor.loadFactoryPreset (index);
+        auto routes = 0;
+        for (int i = 0; i < Mod::maxSlots; ++i)
+            routes += processor.readModSlot (i).source == Mod::Source::Lfo1 ? 1 : 0;
+        if (routes >= 3)
+        {
+            std::cout << "preset: " << processor.getFactoryPresetNames()[index] << std::endl;
+            break;
+        }
+    }
+    shell->showPage ("MAIN");
+    settle (800);
+
+    // 1 Edited since load: RESO (PLAY) and a reverb knob (FX) turned.
+    {
+        shell->showPage ("FX");
+        settle (500);
+        std::vector<KnobControl*> knobs;
+        findAll<KnobControl> (*editor, knobs);
+        juce::String fxId;
+        for (auto* knob : knobs)
+            if (visibleInTree (knob) && fxId.isEmpty() && knob->getParameterId().isNotEmpty())
+                fxId = knob->getParameterId();
+        shell->showPage ("MAIN");
+        settle (500);
+        turn ("f1_reso", 0.62f);
+        if (fxId.isNotEmpty())
+            if (auto* parameter = processor.apvts.getParameter (fxId))
+                parameter->setValueNotifyingHost (parameter->getValue() > 0.5f ? 0.2f : 0.8f);
+        std::cout << "fx knob: " << fxId << std::endl;
+    }
+    settle (600);
+    shoot ("1-edited-dots");
+
+    // 2 A ring hovered: CUTOFF shows its depth and source.
+    if (auto* knob = knobFor ("f1_cutoff"))
+    {
+        auto& slider = knob->getSlider();
+        const auto centre = editor->getLocalPoint (&slider, slider.getLocalBounds().getCentre()).toFloat();
+        auto found = false;
+        for (float r = 10.0f; r < 60.0f && ! found; r += 1.0f)
+            for (float a = -2.4f; a < 2.4f && ! found; a += 0.1f)
+            {
+                const auto at = centre + juce::Point<float> (std::sin (a), -std::cos (a)) * r;
+                mouse (at, {});
+                if (knob->hotRouting() != nullptr)
+                    found = true;
+            }
+        std::cout << "ring hovered: " << (found ? "yes" : "no") << std::endl;
+        settle (300);
+        shoot ("2-ring-depth");
+        mouse ({ 2.0f, 700.0f }, {});
+        settle (300);
+    }
+
+    // 3 A|B hovered after B's RESO and DRIVE moved.
+    if (auto* ab = findChild<ABButton> (*editor))
+    {
+        ab->triggerClick(); // (B starts as a copy of A)
+        settle (300);
+        turn ("f1_reso", 0.3f);
+        turn ("f1_drive", 0.7f);
+        settle (300);
+        mouse (editor->getLocalPoint (ab, ab->getLocalBounds().getCentre()).toFloat(), {});
+        settle (600);
+        shoot ("3-ab-diff");
+        std::cout << "A|B tooltip: " << ab->getTooltip() << std::endl;
+        mouse ({ 2.0f, 700.0f }, {});
+        settle (300);
+    }
+
+    // 4 OSC 3 (prefix "sub") switched off: its greyed TABLE hovered.
+    {
+        std::vector<ComboControl*> combos;
+        findAll<ComboControl> (*editor, combos);
+        for (auto* combo : combos)
+            if (combo->getParameterId() == "sub_table" && visibleInTree (combo))
+            {
+                mouse (editor->getLocalPoint (combo, combo->getLocalBounds().getCentre()).toFloat(), {});
+                break;
+            }
+        settle (600);
+        shoot ("4-off-switch");
+    }
+
+    std::cout << "usability pass 2 frames in " << outDir.getFullPathName() << std::endl;
+    return 0;
+}
+
 // --usability <dir>: still frames of the usability flair at 175 % (pass 1:
 // the tabs' route badges, undo's note and flash, the default notch, FINE),
 // full window, for the PR's pictures.
@@ -9200,6 +9354,8 @@ int main (int argc, char** argv)
     if (juce::String (argv[1]) == "--uitest")
         return runUiTests();
 
+    if (juce::String (argv[1]) == "--usability2" && argc > 2)
+        return runUsability2 (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
     if (juce::String (argv[1]) == "--usability" && argc > 2)
         return runUsability (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
 

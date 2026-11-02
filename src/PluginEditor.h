@@ -1,5 +1,7 @@
 #pragma once
 
+#include <map>
+#include <set>
 #include <juce_audio_processors/juce_audio_processors.h>
 
 // macOS and Linux draw the UI through OpenGL (CMake links juce_opengl there);
@@ -241,6 +243,19 @@ private:
     int routeBadgeSource = 0;
     juce::uint64 routeBadgeKey = 0;
     void updateRouteBadges();
+    // The tabs' edited-since-load dots and, while A|B is hovered, the blue
+    // marks on what differs from the other slot (usability flair, pass 2).
+    juce::int64 editedDotsKey = -1;
+    juce::uint64 abMarksKey = 0;
+    juce::uint64 editedSetKey = 1;
+    void updateEditedAndAbMarks();
+    void updateAbMarks();
+    // Hovering something greyed out because its card is switched off: that
+    // card's ON switch glows (usability flair, pass 2).
+    juce::Component::SafePointer<juce::Component> offGlowUnder;
+    juce::Component::SafePointer<ToggleControl> offGlowSwitch;
+    void updateOffSwitchGlow();
+    std::map<juce::String, int> sectionKnobCounts (const std::set<juce::String>& parameterIds, bool markAb);
     juce::String undoToastKey;
     bool undoToastSkip = false;
     ConfirmOverlay confirmOverlay;
