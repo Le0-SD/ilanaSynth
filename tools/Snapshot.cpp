@@ -648,10 +648,20 @@ void runSmallThingsTests (IlanaSynthAudioProcessor& processor, IlanaSynthAudioPr
                 "a Remove step shows the undo note with its name ('" + toast->getText() + "')");
         toast->getUndoButton().triggerClick();
         settle (200);
-        expect (! toast->isVisible() && processor.getUndoManager().getUndoDescription() == "Change cutoff",
-                "UNDO on the note takes the step back and closes the note ('" + processor.getUndoManager().getUndoDescription() + "')");
+        expect (processor.getUndoManager().getUndoDescription() == "Change cutoff",
+                "UNDO on the note takes the step back ('" + processor.getUndoManager().getUndoDescription() + "')");
         settle (200);
-        expect (! toast->isVisible(), "the undo itself shows no note");
+        // (Usability flair pass 1: the undo then says what it changed. CUTOFF
+        // isn't on the open page here, so the key is SHOW, which opens it.)
+        const auto key = toast->getUndoButton().getButtonText();
+        expect (toast->isVisible() && toast->getText().startsWith ("Undid CUTOFF") && (key == "REDO" || key == "SHOW"),
+                "the undo says what it changed ('" + toast->getText() + "', " + key + ")");
+        if (key == "SHOW")
+        {
+            toast->getUndoButton().triggerClick();
+            settle (400);
+            expect (editor.getCurrentPageId() == "MAIN", "SHOW opens the page the undone knob is on (" + editor.getCurrentPageId() + ")");
+        }
         processor.getUndoManager().undo();
         settle (100);
     }
@@ -8990,6 +9000,151 @@ int runFlair (const juce::File& outDir)
     return 0;
 }
 
+// --usability <dir>: still frames of the usability flair at 175 % (pass 1:
+// the tabs' route badges, undo's note and flash, the default notch, FINE),
+// full window, for the PR's pictures.
+int runUsability (const juce::File& outDir)
+{
+    IlanaAnim::fullMotion() = true;
+    outDir.createDirectory();
+    IlanaSynthAudioProcessor processor;
+    processor.prepareToPlay (48000.0, 256);
+    std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditor());
+    editor->setSize (1060, 720);
+#if JUCE_LINUX
+    if (auto* setHandler = (void* (*) (int (*) (void*, void*))) dlsym (RTLD_DEFAULT, "XSetErrorHandler"))
+        setHandler ([] (void*, void*) { return 0; });
+#endif
+    editor->addToDesktop (0);
+    editor->setVisible (true);
+    settle (800);
+    if (auto* tutorial = findChild<TutorialOverlay> (*editor))
+        tutorial->setVisible (false);
+    auto* shell = dynamic_cast<IlanaSynthAudioProcessorEditor*> (editor.get());
+    IlanaTheme::uiScaleRef() = IlanaTheme::uiScaleRef() * 1.75f;
+    IlanaTheme::notifyUiScaleListeners();
+
+    const auto shoot = [&] (const juce::String& name)
+    {
+        const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.75f);
+        juce::FileOutputStream stream (outDir.getChildFile (name + ".png"));
+        if (stream.openedOk())
+        {
+            stream.setPosition (0);
+            stream.truncate();
+            juce::PNGImageFormat().writeImageToStream (image, stream);
+        }
+        std::cout << name << std::endl;
+    };
+    const auto mouse = [&] (juce::Point<float> at, juce::ModifierKeys mods)
+    {
+        if (auto* peer = editor->getPeer())
+            peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse, at, mods, juce::MouseInputSource::defaultPressure,
+                                    juce::MouseInputSource::defaultOrientation, juce::Time::currentTimeMillis());
+    };
+    const auto turn = [&] (const char* id, float plain)
+    {
+        if (auto* parameter = processor.apvts.getParameter (id))
+        {
+            processor.getUndoManager().beginNewTransaction();
+            parameter->beginChangeGesture();
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (plain));
+            parameter->endChangeGesture();
+            processor.getUndoManager().beginNewTransaction();
+        }
+    };
+    const auto knobFor = [&] (const juce::String& id) -> KnobControl*
+    {
+        std::vector<KnobControl*> knobs;
+        findAll<KnobControl> (*editor, knobs);
+        for (auto* knob : knobs)
+            if (knob->getParameterId() == id && visibleInTree (knob))
+                return knob;
+        return nullptr;
+    };
+
+    // A preset with LFO 1 routes on more than one page.
+    for (int index = 0; index < processor.getFactoryPresetNames().size(); ++index)
+    {
+        processor.loadFactoryPreset (index);
+        auto routes = 0;
+        for (int i = 0; i < Mod::maxSlots; ++i)
+            routes += processor.readModSlot (i).source == Mod::Source::Lfo1 ? 1 : 0;
+        if (routes >= 3)
+        {
+            std::cout << "preset: " << processor.getFactoryPresetNames()[index] << std::endl;
+            break;
+        }
+    }
+    shell->showPage ("MAIN");
+    settle (800);
+
+    // 1 The route badges while LFO 1 is hovered.
+    highlightedModSource() = (int) Mod::Source::Lfo1;
+    settle (500);
+    shoot ("1-tab-badges");
+    highlightedModSource() = 0;
+    settle (500);
+
+    // 2 Undo on this page: RESO turned, then undone.
+    turn ("f1_reso", 0.6f);
+    settle (300);
+    if (auto* undo = findButtonWithText (*editor, "undo"))
+        undo->triggerClick();
+    settle (120);
+    shoot ("2-undo-here");
+    settle (2600);
+
+    // 2b Undo of a knob on another page.
+    shell->showPage ("FX");
+    settle (500);
+    turn ("f1_reso", 0.7f);
+    settle (300);
+    if (auto* undo = findButtonWithText (*editor, "undo"))
+        undo->triggerClick();
+    settle (200);
+    shoot ("2-undo-elsewhere");
+    settle (2600);
+    shell->showPage ("MAIN");
+    settle (600);
+
+    // 3 Hovering CUTOFF (turned away from its 12 kHz default): the notch.
+    if (auto* parameter = processor.apvts.getParameter ("f1_cutoff"))
+        parameter->setValueNotifyingHost (parameter->convertTo0to1 (2000.0f));
+    settle (400);
+    if (auto* knob = knobFor ("f1_cutoff"))
+    {
+        auto& slider = knob->getSlider();
+        const auto centre = editor->getLocalPoint (&slider, slider.getLocalBounds().getCentre()).toFloat();
+        mouse (centre, {});
+        for (int i = 0; i < 12; ++i) // (an offscreen window isn't painted, so step the hover fade with throwaway pictures)
+        {
+            editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.75f);
+            settle (40);
+        }
+        shoot ("3-default-notch");
+
+        // 4 Shift-drag: FINE.
+        const auto drag = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier);
+        juce::ModifierKeys::currentModifiers = juce::ModifierKeys (juce::ModifierKeys::shiftModifier); // (events read the held keys from here)
+        mouse (centre, drag);
+        settle (60);
+        mouse (centre.translated (0.0f, -6.0f), drag);
+        settle (60);
+        mouse (centre.translated (0.0f, -12.0f), drag);
+        settle (200);
+        shoot ("4-fine");
+        juce::ModifierKeys::currentModifiers = {};
+        mouse (centre.translated (0.0f, -12.0f), juce::ModifierKeys());
+        settle (200);
+        mouse ({ 2.0f, 700.0f }, {});
+        settle (200);
+    }
+
+    std::cout << "usability frames in " << outDir.getFullPathName() << std::endl;
+    return 0;
+}
+
 // The layout dump's card finder: paints one component on its own and keeps
 // every big, solid, dark filled shape (a card's body) in the component's own
 // coordinates, with its colour.
@@ -9044,6 +9199,9 @@ int main (int argc, char** argv)
 
     if (juce::String (argv[1]) == "--uitest")
         return runUiTests();
+
+    if (juce::String (argv[1]) == "--usability" && argc > 2)
+        return runUsability (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
 
     if (juce::String (argv[1]) == "--flair" && argc > 2)
         return runFlair (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));

@@ -1189,6 +1189,33 @@ public:
         g.setFont (tabFont());
         g.drawText (button.getButtonText(), bounds.withTrimmedBottom (1.0f), juce::Justification::centred);
 
+        // A hovered or pinned mod source's routes on this page: a badge in
+        // the source's colour with the count, at the name's top right
+        // (usability flair, pass 1; the editor sets "routeCount").
+        const auto routes = (int) button.getProperties().getWithDefault ("routeCount", 0);
+        const auto badge = IlanaTheme::fade (button, 903, routes > 0 ? 1.0f : 0.0f, 22.0f);
+        if (badge > 0.01f)
+        {
+            const auto shownCount = routes > 0 ? routes : (int) button.getProperties().getWithDefault ("routeCountShown", 0);
+            if (routes > 0)
+                button.getProperties().set ("routeCountShown", routes);
+            const auto colour = juce::Colour ((juce::uint32) (juce::int64) button.getProperties().getWithDefault ("routeColour", (juce::int64) 0xffff5c9a));
+            const auto textWidth = juce::GlyphArrangement::getStringWidth (juce::Font (tabFont()), button.getButtonText());
+            const auto label = shownCount > 9 ? juce::String ("9+") : juce::String (shownCount);
+            const auto font = IlanaTheme::font (10.5f, true);
+            const auto width = juce::jmax (12.0f, juce::GlyphArrangement::getStringWidth (juce::Font (font), label) + 6.0f);
+            const auto pill = juce::Rectangle<float> (width, 12.0f).withCentre ({ bounds.getCentreX() + textWidth * 0.5f + width * 0.5f - 1.0f,
+                                                                                  bounds.getCentreY() - 9.0f })
+                                  .constrainedWithin (bounds.reduced (0.5f));
+            g.setColour (colour.withMultipliedAlpha (badge));
+            g.fillRoundedRectangle (pill, 6.0f);
+            g.setColour (IlanaTheme::Ui::bg.withMultipliedAlpha (badge));
+            g.setFont (font);
+            g.drawText (label, pill, juce::Justification::centred);
+        }
+        if (badge > 0.01f && badge < 0.99f)
+            button.repaint();
+
         // (The underline is the bar's: drawTabAreaBehindFrontButton.)
 
         if ((hover > 0.01f && hover < 0.99f) || (lit > 0.01f && lit < 0.99f))
@@ -1278,6 +1305,37 @@ public:
     // The packed dial (review 23 mockups): a track arc and the value arc, no cap and
     // no pointer; the value is written inside by the knob. Its arc radius is
     // KnobControl's packedRadius - 1 (see there).
+    // A double-click reset just now (KnobSlider marks it): the hand glides
+    // back to the default instead of jumping, as a preset's values do.
+    static bool justReset (const juce::Slider& slider)
+    {
+        const auto at = (double) slider.getProperties().getWithDefault ("resetGlideAt", 0.0);
+        return at > 0.0 && juce::Time::getMillisecondCounterHiRes() - at < 400.0;
+    }
+
+    // Hovering a knob: a small grey notch on the track where a double-click
+    // resets it to (its default), unless it is already there.
+    static void paintDefaultNotch (juce::Graphics& g, juce::Slider& slider, juce::Point<float> centre, float arcRadius, float lineWidth,
+                                   float hover, float sliderPos, float rotaryStartAngle, float rotaryEndAngle)
+    {
+        if (hover < 0.01f || ! slider.isDoubleClickReturnEnabled() || ! slider.isEnabled())
+            return;
+
+        const auto proportion = (float) slider.valueToProportionOfLength (slider.getDoubleClickReturnValue());
+
+        if (! std::isfinite (proportion) || std::abs (proportion - sliderPos) < 0.01f)
+            return;
+
+        const auto angle = rotaryStartAngle + juce::jlimit (0.0f, 1.0f, proportion) * (rotaryEndAngle - rotaryStartAngle);
+        const auto dir = juce::Point<float> (std::cos (angle - juce::MathConstants<float>::halfPi),
+                                             std::sin (angle - juce::MathConstants<float>::halfPi));
+        juce::Path notch;
+        notch.startNewSubPath (centre + dir * (arcRadius - lineWidth * 1.4f));
+        notch.lineTo (centre + dir * (arcRadius + lineWidth * 0.5f));
+        g.setColour (IlanaTheme::Ui::text.withAlpha (0.8f * juce::jmin (1.0f, hover * 2.5f))); // (in quickly: there before the eye lands on it)
+        g.strokePath (notch, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+
     // Where a dragged knob started (KnobSlider sets "dragGhostPos" on the
     // press and "dragGhostRelease" on the release): a white tick on the
     // track at the starting value and a faint stretch to where it is now,
@@ -1335,7 +1393,7 @@ public:
 
         const auto hover = animatedHover (&slider, slider.isMouseOver() || slider.isMouseButtonDown(), 12.0f);
         auto gliding = false;
-        const auto sliderPos = fadeValue (&slider, 90, targetPos, 20.0f, ! slider.isMouseButtonDown() && IlanaAnim::showing (slider), gliding);
+        const auto sliderPos = fadeValue (&slider, 90, targetPos, 20.0f, (! slider.isMouseButtonDown() || justReset (slider)) && IlanaAnim::showing (slider), gliding);
         if (gliding)
             slider.repaint();
 
@@ -1385,6 +1443,7 @@ public:
         }
 
         paintDragGhost (g, slider, centre, arcRadius, lineWidth, angle, rotaryStartAngle, rotaryEndAngle);
+        paintDefaultNotch (g, slider, centre, arcRadius, lineWidth, hover, sliderPos, rotaryStartAngle, rotaryEndAngle);
 
         if (flare > 0.01f || (hover > 0.01f && hover < 0.99f))
             slider.repaint();
@@ -1410,7 +1469,7 @@ public:
         // its place in a few frames instead of jumping. Offscreen (snapshots,
         // tests) it is always exact.
         auto gliding = false;
-        const auto sliderPos = fadeValue (&slider, 90, targetPos, 20.0f, ! slider.isMouseButtonDown() && IlanaAnim::showing (slider), gliding);
+        const auto sliderPos = fadeValue (&slider, 90, targetPos, 20.0f, (! slider.isMouseButtonDown() || justReset (slider)) && IlanaAnim::showing (slider), gliding);
 
         if (gliding)
             slider.repaint();
@@ -1495,6 +1554,7 @@ public:
         }
 
         paintDragGhost (g, slider, centre, arcRadius, lineWidth, angle, rotaryStartAngle, rotaryEndAngle);
+        paintDefaultNotch (g, slider, centre, arcRadius, lineWidth, hover, sliderPos, rotaryStartAngle, rotaryEndAngle);
 
         // The cap: ink 3 with a hairline rim, a touch lighter on hover.
         const auto bodyRadius = arcRadius - 4.0f;

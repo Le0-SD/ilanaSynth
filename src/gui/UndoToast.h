@@ -28,8 +28,8 @@ public:
         {
             hide();
 
-            if (onUndo != nullptr)
-                onUndo();
+            if (const auto run = action; run != nullptr)
+                run();
         };
         addAndMakeVisible (undoButton);
         setInterceptsMouseClicks (false, true);
@@ -50,6 +50,33 @@ public:
 
     void show (const juce::String& step)
     {
+        undoButton.setButtonText ("UNDO");
+       #if JUCE_MAC
+        undoButton.setTooltip ("Undo this step (Cmd+Z)");
+       #else
+        undoButton.setTooltip ("Undo this step (Ctrl+Z)");
+       #endif
+        action = [this] { if (onUndo != nullptr) onUndo(); };
+        showText (step, shownMs);
+    }
+
+    // After an undo or redo (usability flair, pass 1): what it changed
+    // ("Undid F1 RESO 60 % to 25 %") for a moment, with a key that redoes
+    // it, or SHOW when the knob is on another page.
+    void showNote (const juce::String& note, const juce::String& buttonText, std::function<void()> buttonAction)
+    {
+        undoButton.setButtonText (buttonText);
+        undoButton.setTooltip (buttonText == "SHOW" ? "Show the page this knob is on"
+                                                    : buttonText == "REDO" ? "Redo it" : "Undo it again");
+        action = std::move (buttonAction);
+        showText (note, noteMs);
+    }
+
+    static constexpr int noteMs = 2500;
+
+private:
+    void showText (const juce::String& step, int milliseconds)
+    {
         text = step;
         undoButton.setColour (juce::TextButton::textColourOffId, IlanaTheme::accent()); // (the theme's, now)
         setSize (preferredWidth(), height);
@@ -57,8 +84,10 @@ public:
         setVisible (true);
         toFront (false);
         repaint();
-        startTimer (shownMs);
+        startTimer (milliseconds);
     }
+
+public:
 
     void hide()
     {
@@ -100,4 +129,5 @@ private:
 
     juce::TextButton undoButton;
     juce::String text;
+    std::function<void()> action;
 };
