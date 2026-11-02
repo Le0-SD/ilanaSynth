@@ -481,9 +481,14 @@ void runFxPatcherTests()
         processor.getStateInformation (saved);
         IlanaSynthAudioProcessor loaded;
         loaded.setStateInformation (saved.getData(), (int) saved.getSize());
-        const auto& cables = loaded.getFxPatch().graph.cables();
-        const auto back = loaded.getFxPatch().graph.findCable ({ node, 0 }, { node, 0 });
-        check (back >= 0 && cables[(size_t) back].delayMs == 100.0f && cables[(size_t) back].gain == 0.5f, "a loop's delay and level save and load");
+        // getFxPatch returns a copy: keep it, or cables would dangle.
+        const auto loadedPatch = loaded.getFxPatch();
+        const auto& cables = loadedPatch.graph.cables();
+        const auto back = loadedPatch.graph.findCable ({ node, 0 }, { node, 0 });
+        check (back >= 0 && cables[(size_t) back].delayMs == 100.0f && cables[(size_t) back].gain == 0.5f,
+               "a loop's delay and level save and load (cable " + juce::String (back)
+                   + (back >= 0 ? ", " + juce::String (cables[(size_t) back].delayMs) + " ms at " + juce::String (cables[(size_t) back].gain) : juce::String())
+                   + ", " + juce::String ((int) cables.size()) + " cables)");
     }
 
     // Loops stay bounded: loop cables are held to 70 %, and the ring clamps.

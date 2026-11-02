@@ -96,7 +96,7 @@ inline const ShapeCache& envelopeShape (const IlanaSynthAudioProcessor& p, const
     cache.moves = high - low > 0.11;
     if (prefix.isEmpty())
         low = std::min (low, -0.05), high = std::max (high, 0.05);
-    const auto step = juce::jmax<size_t> (1, run.values.size() / 48);
+    const auto step = std::max<size_t> (1, run.values.size() / 48);
     for (size_t i = 0; i < run.values.size(); i += step)
         cache.values.push_back ((float) ((run.values[i] - low) / std::max (1.0e-6, high - low)));
     return cache;
