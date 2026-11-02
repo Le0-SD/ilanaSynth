@@ -470,7 +470,9 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
-Copy the built `ilanaSynth.vst3` to `/Library/Audio/Plug-Ins/VST3/` (or `~/Library/Audio/Plug-Ins/VST3/`), the `.component` to `/Library/Audio/Plug-Ins/Components/` and the `.clap` to `/Library/Audio/Plug-Ins/CLAP/`, then rescan in your DAW.
+Copy the built `ilanaSynth.vst3` to `/Library/Audio/Plug-Ins/VST3/` (or `~/Library/Audio/Plug-Ins/VST3/`), the `.component` to `/Library/Audio/Plug-Ins/Components/` and the `.clap` to `/Library/Audio/Plug-Ins/CLAP/`, then rescan in your DAW. Copy the `.component`, don't symlink it: the Audio Unit registrar doesn't follow links (`auval -v aumu Ilns Ilan` checks the synth, `auval -v aumf Ilnf Ilan` the FX).
+
+On macOS the interface draws with CoreGraphics by default; the settings menu's GPU rendering (OpenGL) is there to try, but measured on an M4 it is slower. `tools/verify.sh` runs the whole gate on a Mac too (it uses an installed `/Applications/pluginval.app`, `brew install --cask pluginval`).
 
 The standalone app is in `build/ilanaSynth_artefacts/Release/Standalone/`. If macOS refuses to open it, run `xattr -dr com.apple.quarantine <path to ilanaSynth.app>`.
 
