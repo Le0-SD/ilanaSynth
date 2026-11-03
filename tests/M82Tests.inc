@@ -407,6 +407,60 @@ void runTests()
                                                             + juce::String (modal, 1) + " dB vs " + juce::String (wavetable, 1) + " dB)");
         }
 
+        // A voice that played another key first plays this one as a fresh
+        // voice would (2026-11-02, ilana: "it mostly sounds like a sine"):
+        // the note started at the voice's last pitch, and the Modal Piano
+        // took its recorded key from that, so A1 after a high key kept its few
+        // partials, pitched down (-26 dB above 80 Hz).
+        {
+            const auto overtoneShare = [] (bool playHighFirst)
+            {
+                IlanaSynthAudioProcessor processor;
+                setParam (processor, "osc1_mode", 1.0f);
+                setParam (processor, "osc1_excite", 11.0f);
+                setParam (processor, "osc1_damper", 0.5f); // (the chord stops on release)
+                processor.prepareToPlay (48000.0, 256);
+                juce::AudioBuffer<float> buffer (2, 256);
+                std::vector<float> out;
+                const auto lowStart = playHighFirst ? 6 * 48000 : 0;
+                for (int start = 0; start < lowStart + 48000; start += 256)
+                {
+                    juce::MidiBuffer midi;
+                    // (A chord on every voice, so whichever voice A1 gets has played a high key.)
+                    for (int n = 76; n < 108 && playHighFirst; ++n)
+                    {
+                        if (start == 0)
+                            midi.addEvent (juce::MidiMessage::noteOn (1, n, (juce::uint8) 100), 0);
+                        if (start == 256 * 60)
+                            midi.addEvent (juce::MidiMessage::noteOff (1, n), 0);
+                    }
+                    if (start == lowStart)
+                        midi.addEvent (juce::MidiMessage::noteOn (1, 33, (juce::uint8) 124), 0);
+                    buffer.clear();
+                    processor.processBlock (buffer, midi);
+                    if (start >= lowStart)
+                        for (int i = 0; i < 256; ++i)
+                            out.push_back (buffer.getSample (0, i));
+                }
+                // The overtones' share: harmonics 2-8 against the
+                // fundamental (55 Hz), 0.3-1 s in (a plain DFT at each).
+                const auto powerAt = [&out] (double hz)
+                {
+                    std::complex<double> sum;
+                    for (int i = 14400; i < 48000; ++i)
+                        sum += (double) out[(size_t) i] * std::polar (1.0, -juce::MathConstants<double>::twoPi * hz * i / 48000.0);
+                    return std::norm (sum);
+                };
+                auto overtones = 0.0;
+                for (int k = 2; k <= 8; ++k)
+                    overtones += powerAt (55.0 * k * (1.0 + 0.0002 * k * k)) + powerAt (55.0 * k);
+                return 10.0 * std::log10 (juce::jmax (1.0e-30, overtones) / juce::jmax (1.0e-30, powerAt (55.0)));
+            };
+            const auto fresh = overtoneShare (false), reused = overtoneShare (true);
+            check (std::abs (fresh - reused) < 6.0, "a Modal Piano note on a voice that played a high key first keeps its overtones (A1 harmonics 2-8 against the fundamental: "
+                                                      + juce::String (reused, 1) + " dB vs " + juce::String (fresh, 1) + " dB on a fresh voice)");
+        }
+
         // A session saved before that trim (exciterLevels 1) keeps its Modal Piano where it was heard;
         // saved again it stays so, and one saved now (2) plays the trim (bug hunt 2026-10-31).
         {
