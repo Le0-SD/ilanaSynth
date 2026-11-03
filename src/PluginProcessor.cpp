@@ -3087,3 +3087,28 @@ void IlanaSynthAudioProcessor::clearTableNotice()
     ++tableNoticeVersion;
 }
 
+
+void IlanaSynthAudioProcessor::chooseExciter (int osc, int choice)
+{
+    const juce::String prefix (OscillatorIds::prefixes[(size_t) juce::jlimit (0, OscillatorIds::count - 1, osc)]);
+    const auto set = [this, &prefix] (const char* suffix, float value)
+    {
+        if (auto* parameter = apvts.getParameter (prefix + suffix))
+        {
+            parameter->beginChangeGesture();
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
+            parameter->endChangeGesture();
+        }
+    };
+    const auto* excite = apvts.getRawParameterValue (prefix + "_excite");
+    const auto was = excite != nullptr ? juce::roundToInt (excite->load()) : -1;
+    set ("_excite", (float) choice);
+    if (choice == 11 && was != 11)
+    {
+        set ("_string_decay", 0.5f);
+        set ("_string_damp", 0.0f);
+        set ("_string_stiffness", 0.5f);
+        set ("_hammer_hard", 0.5f);
+        set ("_damper", 0.35f);
+    }
+}

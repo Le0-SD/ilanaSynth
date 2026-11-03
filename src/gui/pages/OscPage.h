@@ -1486,13 +1486,7 @@ public:
             card.exciterPills.getChosen = [this, i] { return readChoice (juce::String (OscillatorIds::prefixes[(size_t) i]) + "_excite"); };
             card.exciterPills.onChoose = [this, i] (int choice)
             {
-                if (auto* parameter = processorRef.apvts.getParameter (juce::String (OscillatorIds::prefixes[(size_t) i]) + "_excite"))
-                    processorRef.performEdit ("OSC " + juce::String (i + 1) + " exciter", [parameter, choice]
-                    {
-                        parameter->beginChangeGesture();
-                        parameter->setValueNotifyingHost (parameter->convertTo0to1 ((float) choice));
-                        parameter->endChangeGesture();
-                    });
+                processorRef.performEdit ("OSC " + juce::String (i + 1) + " exciter", [this, i, choice] { processorRef.chooseExciter (i, choice); });
                 updateModeVisibility();
                 updateEnabled();
             };

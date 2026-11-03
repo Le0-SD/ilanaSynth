@@ -407,6 +407,26 @@ void runTests()
                                                             + juce::String (modal, 1) + " dB vs " + juce::String (wavetable, 1) + " dB)");
         }
 
+        // Picking the Modal Piano icon sets the string knobs to the
+        // recording's (Modal Grand's); other exciters, and picking it again,
+        // leave them (2026-11-03, ilana: "yes").
+        {
+            IlanaSynthAudioProcessor processor;
+            const auto get = [&processor] (const char* id) { return processor.apvts.getRawParameterValue (id)->load(); };
+            setParam (processor, "osc1_mode", 1.0f);
+            processor.chooseExciter (0, 11);
+            const auto picked = get ("osc1_excite") == 11.0f && get ("osc1_string_decay") == 0.5f && get ("osc1_string_damp") == 0.0f
+                                && get ("osc1_string_stiffness") == 0.5f && get ("osc1_hammer_hard") == 0.5f
+                                && std::abs (get ("osc1_damper") - 0.35f) < 1.0e-4f;
+            setParam (processor, "osc1_string_stiffness", 0.8f);
+            processor.chooseExciter (0, 11);
+            const auto kept = get ("osc1_string_stiffness") == 0.8f;
+            setParam (processor, "osc2_string_damp", 0.6f);
+            processor.chooseExciter (1, 9);
+            const auto others = get ("osc2_excite") == 9.0f && get ("osc2_string_damp") == 0.6f;
+            check (picked && kept && others, "picking the Modal Piano sets its string knobs to the recording's; other picks keep them");
+        }
+
         // A voice that played another key first plays this one as a fresh
         // voice would (2026-11-02, ilana: "it mostly sounds like a sine"):
         // the note started at the voice's last pitch, and the Modal Piano
