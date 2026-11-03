@@ -395,7 +395,13 @@ void Voice::startNote (int midiNoteNumber, float velocity, juce::SynthesiserSoun
         currentFrequency = shared->lastNoteFrequency;
         hasPlayedNote = true;
     }
-    else if (! hasPlayedNote || ! glide)
+    // With GLIDE off the note starts at its own pitch. (It used to start at
+    // this voice's last pitch and snap on the first sub-block, which was
+    // inaudible for oscillators but not for what startNote sets up from the
+    // pitch: the Modal Piano chose its recorded key, attack and board from
+    // the voice's previous note, so a low key on a voice that last played
+    // a high one rang as a few pitched-down partials, a sine thud.)
+    else if (! hasPlayedNote || ! glide || params.glideTime <= 0.001f)
     {
         currentFrequency = baseFrequency;
         hasPlayedNote = true;

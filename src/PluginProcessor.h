@@ -110,6 +110,13 @@ public:
     void preloadAirwindows (int algorithm);
     void preloadAirwindowsCategory (int category, int choice);
     void randomizeFxChain();
+    // Picking an exciter on oscillator `osc` (0-based, the OSC card's icons):
+    // the Modal Piano sets the oscillator's string knobs to where they play
+    // the recording as measured (Modal Grand's: DECAY and STIFF at the
+    // middle, DAMP 0, HAMMER 0.5, DAMPER 0.35); the string defaults (STIFF 0,
+    // DAMP 0.35) play it far from a piano. Other exciters keep the knobs.
+    // Call inside an edit step; presets and automation never come here.
+    void chooseExciter (int osc, int choice);
     bool saveFxChainToFile (const juce::File& file);
     bool loadFxChainFromFile (const juce::File& file);
     void loadReverbIr (const juce::File& file);
