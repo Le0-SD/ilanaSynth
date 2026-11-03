@@ -514,6 +514,40 @@ target_link_libraries(ilanaPresetRender
         juce::juce_recommended_config_flags
 )
 
+juce_add_console_app(ilanaMidiRender PRODUCT_NAME "ilanaMidiRender")
+
+target_sources(ilanaMidiRender PRIVATE
+    tools/MidiRender.cpp
+    src/PluginProcessor.cpp
+    ${ILANA_PROCESSOR_SOURCES}
+    src/MtsEsp.cpp
+    src/dsp/Wavetable.cpp
+    src/dsp/WavetableDoc.cpp
+    src/dsp/TableFactory.cpp
+    src/dsp/Voice.cpp
+    src/dsp/airwindows/Registry.cpp
+)
+
+target_include_directories(ilanaMidiRender PRIVATE src)
+
+target_compile_definitions(ilanaMidiRender PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    ILANA_TEST_BUILD=1
+    ILANA_FINGERPRINT_BUILD=1
+    JucePlugin_Name="ilanaSynth"
+)
+
+target_link_libraries(ilanaMidiRender
+    PRIVATE
+        juce::juce_dsp
+        juce::juce_audio_formats
+        juce::juce_audio_processors
+        juce::juce_audio_utils
+    PUBLIC
+        juce::juce_recommended_config_flags
+)
+
 juce_add_console_app(ilanaKnobAudit PRODUCT_NAME "ilanaKnobAudit")
 
 target_sources(ilanaKnobAudit PRIVATE
@@ -696,3 +730,6 @@ foreach(target ilanaSynth ilanaSynthFX ilanaTableTest ilanaSnapshot ilanaFingerp
         target_link_libraries(${target} PRIVATE ilanaWavetables)
     endif()
 endforeach()
+
+ilana_big_stack (ilanaMidiRender)
+target_link_libraries(ilanaMidiRender PRIVATE ilanaStretch ilanaWavetables)
